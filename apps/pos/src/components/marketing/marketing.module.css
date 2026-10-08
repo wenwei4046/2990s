@@ -830,6 +830,7 @@
   font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
 }
 .facetOptOn { background: var(--c-ink); color: var(--c-cream); border-color: var(--c-ink); }
+.kpiBlock { display: flex; flex-direction: column; gap: 8px; }
 .kpiGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 .kpiCard {
   background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px;
@@ -845,6 +846,8 @@
 .profD { text-align: right; font-size: 12px; font-weight: 600; }
 .prodHead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .prodGrid { display: grid; grid-template-columns: 22px minmax(0, 1fr) 56px 110px 56px 58px; gap: 10px; }
+/* The finance tier's Margin column, between Revenue and Share. */
+.prodGridMargin { grid-template-columns: 22px minmax(0, 1fr) 56px 110px 60px 56px 58px; }
 .prodHeader {
   padding-bottom: 6px; font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-soft);
 }

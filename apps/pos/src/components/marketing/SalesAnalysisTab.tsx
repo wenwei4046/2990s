@@ -1,7 +1,8 @@
 // Sales analysis (design screens 10–12): "Monthly overview" — who the
 // customers are — and "By product" — how each model sells and to whom. The
 // date range comes from the picker in the page header; every number here is
-// computed by sales-model.ts.
+// computed by sales-model.ts. Margin appears only when the feed carries it
+// (Houzs's finance tier — see sales-lines-queries.ts).
 
 import { useMemo, useState } from 'react';
 import { LayoutDashboard, PackageSearch, SlidersHorizontal } from 'lucide-react';
@@ -213,14 +214,17 @@ export const SalesAnalysisTab = ({ dataset, range }: { dataset: SalesDataset; ra
             </div>
           </div>
 
-          <div className={s.kpiGrid}>
-            {ov.kpis.map((k) => (
-              <div key={k.label} className={s.kpiCard}>
-                <span className={s.kpiLabel}>{k.label}</span>
-                <span className={s.kpiValue}>{k.value}</span>
-                <span className={s.kpiSub} style={{ color: k.subFg }}>{k.sub}</span>
-              </div>
-            ))}
+          <div className={s.kpiBlock}>
+            <div className={s.kpiGrid}>
+              {ov.kpis.map((k) => (
+                <div key={k.label} className={s.kpiCard}>
+                  <span className={s.kpiLabel}>{k.label}</span>
+                  <span className={s.kpiValue}>{k.value}</span>
+                  <span className={s.kpiSub} style={{ color: k.subFg }}>{k.sub}</span>
+                </div>
+              ))}
+            </div>
+            {ov.marginNote && <span className={s.saFootnote}>{ov.marginNote}</span>}
           </div>
 
           <div className={s.autoGrid300}>
@@ -244,11 +248,13 @@ export const SalesAnalysisTab = ({ dataset, range }: { dataset: SalesDataset; ra
 
           <div className={`${s.card20} ${s.gap4}`}>
             <div className={s.prodHead}><span className={s.cardTitle15}>Products these customers buy</span><span className={s.cardMeta12}>By revenue</span></div>
-            <div className={`${s.prodGrid} ${s.prodHeader}`}>
-              <span>#</span><span>Model</span><span className={s.right}>Units</span><span className={s.right}>Revenue</span><span className={s.right}>Share</span><span className={s.right}>Index</span>
+            <div className={`${s.prodGrid} ${ov.margins ? s.prodGridMargin : ''} ${s.prodHeader}`}>
+              <span>#</span><span>Model</span><span className={s.right}>Units</span><span className={s.right}>Revenue</span>
+              {ov.margins && <span className={s.right}>Margin</span>}
+              <span className={s.right}>Share</span><span className={s.right}>Index</span>
             </div>
             {ov.products.map((m) => (
-              <div key={m.name} className={`${s.prodGrid} ${s.prodRow}`}>
+              <div key={m.name} className={`${s.prodGrid} ${ov.margins ? s.prodGridMargin : ''} ${s.prodRow}`}>
                 <span className={s.prodRank}>{m.rank}</span>
                 <span className={s.prodModel}>
                   <span className={s.prodModelTop}>
@@ -259,6 +265,7 @@ export const SalesAnalysisTab = ({ dataset, range }: { dataset: SalesDataset; ra
                 </span>
                 <span className={s.prodMuted}>{m.units}</span>
                 <span className={s.prodRev}>{m.rev}</span>
+                {ov.margins && <span className={s.prodMuted}>{m.margin}</span>}
                 <span className={s.prodMuted}>{m.share}</span>
                 <span className={s.right}>
                   {ov.cfCount > 0 && <span className={s.idxPill} style={{ background: m.idxBg, color: m.idxFg }}>{m.idx}</span>}

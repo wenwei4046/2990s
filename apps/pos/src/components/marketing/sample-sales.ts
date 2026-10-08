@@ -4,9 +4,10 @@
 // analysis tab shows exactly the prototype's numbers (AM9036: 61 sets,
 // 154 compartments, RM 210,299 …).
 //
-// Shown ONLY until Houzs serves real order lines (GET /sales-analysis/lines,
-// see lib/sales-lines-queries.ts), and always under the "Sample data" label the
-// design carries beside the showroom picker. Nothing here is real.
+// Shown ONLY in the local simulation build (lib/sales-lines-queries.ts), which
+// has no Houzs behind it, and always under the "Sample data" label the design
+// carries beside the showroom picker. A live build never falls back to it: a
+// failed read is shown as a failure. Nothing here is real.
 // ----------------------------------------------------------------------------
 
 import { dnum, type SaCat, type SaleLine, type SalesDataset } from './sales-model';
@@ -92,18 +93,32 @@ function generate(): SaleLine[] {
   });
 }
 
-let cached: SalesDataset | null = null;
+/** Made-up margins (34–49% of the price), so the simulation's director persona
+ *  can see the margin views. Drawn from the model's place in the list rather
+ *  than the generator, which keeps every number above exactly the prototype's.
+ *  One model has no cost, as some real lines do, so the "left out" note shows. */
+const sampleMargin = (o: SaleLine): number | null => {
+  if (o.model === 'ANGGN-FIRM') return null;
+  const i = SA_MODELS.findIndex((m) => m[0] === o.model);
+  return Math.round(o.amount * (0.34 + (i % 4) * 0.05));
+};
 
-export function sampleDataset(): SalesDataset {
-  if (!cached) {
-    cached = {
-      lines: generate(),
+const cached: { plain?: SalesDataset; margins?: SalesDataset } = {};
+
+/** `withMargins` is the simulation's director persona — the finance tier. */
+export function sampleDataset(withMargins = false): SalesDataset {
+  const key = withMargins ? 'margins' : 'plain';
+  if (!cached[key]) {
+    const lines = generate();
+    cached[key] = {
+      lines: withMargins ? lines.map((o) => ({ ...o, margin: sampleMargin(o) })) : lines,
       showrooms: SAMPLE_SHOWROOMS,
       states: SA_STATES.map((x) => x[0]),
       d0: dnum(2025, 11, 1),
       d1: dnum(2026, 9, 30),
+      margins: withMargins,
       sample: true,
     };
   }
-  return cached;
+  return cached[key]!;
 }

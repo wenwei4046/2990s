@@ -14,9 +14,15 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
   status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-pos-simulation': 'local-only' },
 });
 
-/** 'marketing' turns the demo account into the marketing account. */
-export const simulationPersona = (): 'marketing' | 'sales' => {
-  try { return localStorage.getItem(PERSONA_KEY) === 'marketing' ? 'marketing' : 'sales'; } catch { return 'sales'; }
+export type SimulationPersona = 'marketing' | 'director' | 'sales';
+
+/** 'marketing' turns the demo account into the marketing account; 'director'
+ *  into a Sales Director, the finance tier that Sales analysis shows margin to. */
+export const simulationPersona = (): SimulationPersona => {
+  try {
+    const v = localStorage.getItem(PERSONA_KEY);
+    return v === 'marketing' || v === 'director' ? v : 'sales';
+  } catch { return 'sales'; }
 };
 
 const display = (id: string, venueId: string, type: string, name: string, code: string, photoUrl: string | null, extra: Row = {}): Row => ({
@@ -89,7 +95,10 @@ const requestCols = (b: Row) => ({
 export function marketingDispatch(path: string, method: string, body: Row): Response | null {
   if (!path.startsWith('/marketing/')) return null;
   const st = store();
-  const me = simulationPersona() === 'marketing' ? { name: 'Marketing', role: 'Marketing' } : { name: 'Demo Sales', role: 'Sales' };
+  const persona = simulationPersona();
+  const me = persona === 'marketing' ? { name: 'Marketing', role: 'Marketing' }
+    : persona === 'director' ? { name: 'Director', role: 'Sales Director' }
+    : { name: 'Demo Sales', role: 'Sales' };
   const live = st.displays.filter((d) => !d.removed_at);
 
   if (path === '/marketing/state' && method === 'GET') {

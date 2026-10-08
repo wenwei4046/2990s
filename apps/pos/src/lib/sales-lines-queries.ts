@@ -8,11 +8,16 @@
 // that: it returns month-level rollups, and it strips the demographics.
 //
 // So this reads GET /sales-analysis/lines (Houzs, added for this page —
-// backend/src/scm/routes/sales-analysis.ts). Until a Houzs build that serves it
-// is deployed the route 404s, and the tab falls back to the design's sample
-// data, clearly labelled "Sample data". A 404 is the ONLY status that falls
-// back: anything else is a real failure and is shown as one, never papered
-// over with invented numbers.
+// backend/src/scm/routes/sales-analysis.ts, live since Houzs #4541). Every
+// failure is shown as one, a 404 included: a 404 here means Houzs no longer
+// serves the route (it has deleted POS routes as "dead code" before — see
+// CLAUDE.md), and invented numbers would hide exactly that. Only the local
+// simulation build, which has no Houzs behind it, shows the design's sample
+// data, under its "Sample data" label.
+//
+// MARGIN arrives only for Houzs's finance tier (`canViewScmFinance`, with the
+// cost display switch on); for anyone else the key is absent, never zero, and
+// the views draw no margin at all.
 // ----------------------------------------------------------------------------
 
 import { useQuery } from '@tanstack/react-query';
@@ -23,6 +28,7 @@ import {
 } from '../components/marketing/sales-model';
 import { isSofaAccessory, shapeName, sizeName } from '../components/marketing/marketing-model';
 import { sampleDataset } from '../components/marketing/sample-sales';
+import { IS_SIMULATION } from './simulation-mode';
 
 /** One line as Houzs sends it (scm/lib/sales-lines.ts over there). Facts, not
  *  labels: the variant each view prints is named here, by the same rules the
@@ -41,6 +47,9 @@ export interface WireLine {
   sizeLabel: string | null;
   qty: number;
   totalSen: number;
+  /** Revenue minus cost, integer sen: present for the finance tier only, and
+   *  null where a priced line has no cost yet. */
+  marginSen?: number | null;
   customerId: string | null;
   race: string | null;
   age: number | null;
@@ -78,6 +87,8 @@ export const todayMy = (): number => {
 export function datasetFromWire(lines: WireLine[]): SalesDataset {
   const out: SaleLine[] = [];
   const showrooms = new Map<string, string>();
+  // Houzs puts the key on every line or on none (scm/lib/sales-lines.ts).
+  const margins = lines.some((w) => w != null && typeof w === 'object' && 'marginSen' in w);
   for (const w of lines) {
     const wireCat = CAT[String(w.category).toUpperCase()];
     const day = isoToDay(w.soDate ?? '');
@@ -97,6 +108,9 @@ export function datasetFromWire(lines: WireLine[]): SalesDataset {
       modules,
       qty: w.qty,
       amount: totalSen / 100 / w.qty,
+      ...(margins
+        ? { margin: typeof w.marginSen === 'number' && Number.isFinite(w.marginSen) ? w.marginSen / 100 / w.qty : null }
+        : {}),
       cust: w.customerId ?? `walk-in:${w.docNo}`,
       race: w.race || null,
       age: ageBand(w.age),
@@ -112,8 +126,25 @@ export function datasetFromWire(lines: WireLine[]): SalesDataset {
     states: stateKeys(out),
     d0: first,
     d1: today,
+    margins,
     sample: false,
   };
+}
+
+export async function fetchSalesLines(includeTest: boolean): Promise<SalesDataset> {
+  const params = new URLSearchParams();
+  if (includeTest) params.set('includeTest', 'true');
+  const qs = params.toString();
+  const res = await authedFetchRaw(`/sales-analysis/lines${qs ? `?${qs}` : ''}`);
+  if (res.status === 404) {
+    throw new Error('HouzsERP does not serve the sales lines this page reads (GET /sales-analysis/lines returned 404).');
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text.slice(0, 200)}`);
+  }
+  const body = (await res.json()) as { lines?: WireLine[] };
+  return datasetFromWire(body.lines ?? []);
 }
 
 export function useSalesLines(includeTest: boolean, enabled: boolean) {
@@ -123,17 +154,11 @@ export function useSalesLines(includeTest: boolean, enabled: boolean) {
     staleTime: 60_000,
     retry: false,
     queryFn: async () => {
-      const params = new URLSearchParams();
-      if (includeTest) params.set('includeTest', 'true');
-      const qs = params.toString();
-      const res = await authedFetchRaw(`/sales-analysis/lines${qs ? `?${qs}` : ''}`);
-      if (res.status === 404) return sampleDataset();
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`${res.status}: ${text.slice(0, 200)}`);
+      if (IS_SIMULATION) {
+        const { simulationPersona } = await import('../simulation/marketing');
+        return sampleDataset(simulationPersona() === 'director');
       }
-      const body = (await res.json()) as { lines?: WireLine[] };
-      return datasetFromWire(body.lines ?? []);
+      return fetchSalesLines(includeTest);
     },
   });
 }

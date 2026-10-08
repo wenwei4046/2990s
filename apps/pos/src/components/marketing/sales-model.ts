@@ -12,6 +12,12 @@
 //     state; about a third of real orders were captured without them. Those
 //     still count in every total, and each breakdown that has any gets a final
 //     grey "Unknown" row so its shares add up instead of silently falling short.
+//
+// And one addition: MARGIN. The design was drawn for the marketing account,
+// which never sees cost. Houzs sends margin to its finance tier only (the
+// directors — owner 2026-07-16); for them a Gross margin KPI, a Margin column
+// and a By-product figure join the views. It is measured over the lines whose
+// cost is known, and the revenue that leaves out is said, not hidden.
 // ----------------------------------------------------------------------------
 
 export type SaCat = 'Sofa' | 'Mattress' | 'Bed frame' | 'Accessory';
@@ -74,6 +80,10 @@ export interface SaleLine {
   qty: number;
   /** RM per unit; revenue is amount × qty. */
   amount: number;
+  /** Gross margin, RM per unit like `amount`. null where a priced line has no
+   *  cost yet; absent unless the caller is Houzs's finance tier, which is the
+   *  only caller it sends margin to. */
+  margin?: number | null;
   cust: string;
   race: string | null;
   age: string | null;
@@ -89,6 +99,8 @@ export interface SalesDataset {
   /** First and last day that can carry data (picker bounds, presets). */
   d0: number;
   d1: number;
+  /** The feed carried margin: the views add it wherever revenue is shown. */
+  margins: boolean;
   sample: boolean;
 }
 
@@ -110,6 +122,21 @@ const sum = (l: SaleLine[]) => l.reduce((a, o) => a + amt(o), 0);
 const units = (l: SaleLine[]) => l.reduce((a, o) => a + o.qty, 0);
 const orderCount = (l: SaleLine[]) => new Set(l.map((o) => o.order)).size;
 const custs = (l: SaleLine[]) => new Set(l.map((o) => o.cust)).size;
+
+/** Gross margin over the lines whose cost is known. `base` is the revenue it
+ *  is measured against; `unknown` is the revenue left out for want of a cost —
+ *  counting it would read as 100% margin on those lines. */
+interface MarginSum { rm: number; base: number; unknown: number }
+const marginSum = (l: SaleLine[]): MarginSum => {
+  const m = { rm: 0, base: 0, unknown: 0 };
+  for (const o of l) {
+    if (o.margin == null) m.unknown += amt(o);
+    else { m.rm += o.margin * o.qty; m.base += amt(o); }
+  }
+  return m;
+};
+const marginPct = (m: MarginSum): number | null => (m.base > 0 ? (m.rm / m.base) * 100 : null);
+const P1 = (x: number | null): string => (x == null ? '—' : x.toFixed(1) + '%');
 
 /** Location key for a line: its state when that is a listed key, else 'Others'
  *  when the list folds, else unknown. */
@@ -187,8 +214,12 @@ export interface OverviewView {
   cfLine: string;
   cfCount: number;
   kpis: Array<{ label: string; value: string; sub: string; subFg: string }>;
+  /** The products table carries a Margin column. */
+  margins: boolean;
+  /** Said under the KPIs when some revenue in scope has no cost to measure. */
+  marginNote: string | null;
   profile: ProfileCard[];
-  products: Array<{ rank: number; name: string; cat: SaCat; color: string; units: number; rev: string; pct: string; share: string; idx: string; idxFg: string; idxBg: string }>;
+  products: Array<{ rank: number; name: string; cat: SaCat; color: string; units: number; rev: string; margin: string; pct: string; share: string; idx: string; idxFg: string; idxBg: string }>;
   productsEmpty: boolean;
   heatCols: string[];
   heat: Array<{ label: string; color: string; cells: Array<{ v: string; bg: string; fg: string }> }>;
@@ -238,10 +269,10 @@ export function overviewView(ds: SalesDataset, f: SalesFilter, crit: Criteria, h
     };
   };
 
-  const gm = new Map<string, { units: number; rev: number; cat: SaCat }>();
+  const gm = new Map<string, { units: number; rev: number; cat: SaCat; lines: SaleLine[] }>();
   for (const o of pOrds) {
-    const g = gm.get(o.model) ?? { units: 0, rev: 0, cat: o.cat };
-    g.units += o.qty; g.rev += amt(o); gm.set(o.model, g);
+    const g = gm.get(o.model) ?? { units: 0, rev: 0, cat: o.cat, lines: [] };
+    g.units += o.qty; g.rev += amt(o); g.lines.push(o); gm.set(o.model, g);
   }
   const gTop = [...gm.entries()].sort((a, b) => b[1].rev - a[1].rev).slice(0, 8);
   const gMax = gTop.length ? gTop[0]![1].rev : 1;
@@ -272,9 +303,31 @@ export function overviewView(ds: SalesDataset, f: SalesFilter, crit: Criteria, h
     crit.state !== 'all' ? 'in ' + crit.state : '',
   ].filter(Boolean).join(', ');
 
+  /* Gross margin, for the finance tier only (Houzs sends it to no one else).
+     Compared like the other KPIs — with the previous period, or with all
+     customers while criteria are set — but in points, not percent. */
+  const mg = marginSum(pOrds);
+  const mPct = marginPct(mg);
+  const mVs = marginPct(marginSum(cfCount ? s.ords : pPrev));
+  const mD = mPct != null && mVs != null ? mPct - mVs : null;
+  const pts = (x: number) => `${Math.abs(x).toFixed(1)} pts`;
+  const marginKpi = {
+    label: 'Gross margin',
+    value: P1(mPct),
+    sub: `${RMk(mg.rm)} · ${mD == null
+      ? (cfCount ? 'no comparison' : 'no earlier data')
+      : cfCount ? `${mD >= 0 ? '+' : '−'}${pts(mD)} vs all customers`
+      : `${mD >= 0 ? '▲' : '▼'} ${pts(mD)} vs previous ${s.len === 1 ? 'day' : s.len + ' days'}`}`,
+    subFg: fgD(mD),
+  };
+
   return {
     cfCount,
     cfLine: cfCount ? `Customers ${crLine} · ${s.label}` : `All customers · ${s.label}`,
+    margins: ds.margins,
+    marginNote: ds.margins && mg.unknown > 0
+      ? `Gross margin leaves out ${RMk(mg.unknown)} of sales that have no cost recorded yet.`
+      : null,
     kpis: [
       { label: 'Customers', value: String(custs(pOrds)), sub: fmtD(kD[0]!), subFg: fgD(kD[0]!) },
       { label: 'Items bought', value: String(units(pOrds)), sub: `${pOrders} orders · ${fmtD(kD[1]!)}`, subFg: fgD(kD[1]!) },
@@ -284,6 +337,7 @@ export function overviewView(ds: SalesDataset, f: SalesFilter, crit: Criteria, h
         sub: cfCount ? (() => { const x = dl(aov, allAov) ?? 0; return `${x >= 0 ? '+' : '−'}${Math.abs(Math.round(x))}% vs all customers`; })() : fmtD(kD[3]!),
         subFg: cfCount ? (aov >= allAov ? '#2F5D4F' : '#A6471E') : fgD(kD[3]!),
       },
+      ...(ds.margins ? [marginKpi] : []),
     ],
     profile: [
       profCard('Race', 'race', SA_RACES, s.label, 'Orders'),
@@ -297,6 +351,7 @@ export function overviewView(ds: SalesDataset, f: SalesFilter, crit: Criteria, h
       const ix = sa0 ? sg / sa0 : 1;
       return {
         rank: i + 1, name, cat: g.cat, color: SA_CAT_COLOR[g.cat], units: g.units, rev: RMk(g.rev),
+        margin: ds.margins ? P1(marginPct(marginSum(g.lines))) : '',
         pct: (g.rev / gMax) * 100 + '%', share: P0(sg * 100),
         idx: cfCount ? ix.toFixed(1) + '×' : '',
         idxFg: ix >= 1.2 ? '#2F5D4F' : ix <= 0.8 ? '#A6471E' : '#5C5455',
@@ -410,6 +465,7 @@ export function productView(ds: SalesDataset, f: SalesFilter, saCat: SaCat, saMo
         { value: String(mUnits), label: saCat === 'Sofa' ? 'Sets sold' : 'Units sold' },
         ...(saCat === 'Sofa' ? [{ value: String(mOrds.reduce((a, o) => a + o.modules.length * o.qty, 0)), label: 'Compartments' }] : []),
         { value: RMk(mRev), label: 'Revenue' },
+        ...(ds.margins ? [{ value: P1(marginPct(marginSum(mOrds))), label: 'Gross margin' }] : []),
         { value: P0((mUnits / catUnits) * 100), label: `of ${saCat.toLowerCase()} units` },
       ],
       variantTitle: saCat === 'Sofa' ? 'Best-selling combos' : saCat === 'Accessory' ? 'Variants' : 'Best-selling sizes',

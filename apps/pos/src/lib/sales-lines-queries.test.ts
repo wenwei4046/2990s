@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('./apiClient', () => ({ authedFetchRaw: vi.fn() }));
 
-const { datasetFromWire } = await import('./sales-lines-queries');
+const { datasetFromWire, fetchSalesLines } = await import('./sales-lines-queries');
+const { authedFetchRaw } = await import('./apiClient');
 type Wire = Parameters<typeof datasetFromWire>[0][number];
 
 const wire = (over: Partial<Wire>): Wire => ({
@@ -55,5 +56,46 @@ describe('datasetFromWire — Houzs lines into the views\' lines', () => {
     ]);
     expect(ds.lines).toEqual([]);
     expect(ds.sample).toBe(false);
+  });
+});
+
+describe('datasetFromWire — margin, for the finance tier only', () => {
+  it('reads no margin when Houzs sends none', () => {
+    const ds = datasetFromWire([wire({})]);
+    expect(ds.margins).toBe(false);
+    expect('margin' in ds.lines[0]!).toBe(false);
+  });
+
+  it('reads it per unit like the price, and keeps an unknown one unknown', () => {
+    const ds = datasetFromWire([
+      wire({ qty: 2, totalSen: 300000, marginSen: 90000 }),
+      wire({ docNo: 'SO-2', totalSen: 149000, marginSen: null }),
+    ]);
+    expect(ds.margins).toBe(true);
+    expect(ds.lines[0]).toMatchObject({ amount: 1500, margin: 450 });
+    expect(ds.lines[1]!.margin).toBeNull();
+  });
+});
+
+describe('fetchSalesLines', () => {
+  const answer = (status: number, body: unknown) =>
+    vi.mocked(authedFetchRaw).mockResolvedValueOnce(new Response(JSON.stringify(body), { status }));
+
+  it('shows a 404 as a failure — never as sample data', async () => {
+    answer(404, { error: 'not_found' });
+    await expect(fetchSalesLines(false)).rejects.toThrow(/sales-analysis\/lines returned 404/);
+  });
+
+  it('shows a refusal as a failure, with what Houzs said', async () => {
+    answer(403, { error: 'forbidden', reason: 'sales_lines_requires_scm.so.view_all_or_pos_marketing' });
+    await expect(fetchSalesLines(false)).rejects.toThrow(/^403: .*sales_lines_requires/);
+  });
+
+  it('turns the lines into a real dataset, asking for test orders only when told to', async () => {
+    answer(200, { includeTest: true, lines: [wire({})] });
+    const ds = await fetchSalesLines(true);
+    expect(vi.mocked(authedFetchRaw)).toHaveBeenLastCalledWith('/sales-analysis/lines?includeTest=true');
+    expect(ds.sample).toBe(false);
+    expect(ds.lines).toHaveLength(1);
   });
 });
