@@ -4,11 +4,11 @@
 import { useState } from 'react';
 import { BedDouble, BedSingle, ClipboardCopy, ClipboardList, PackageCheck, Sofa, Trash2, Truck } from 'lucide-react';
 import {
-  blankRequest, exportText, missingOf, RM, requestTotal, shapeName, shortDate, typeOf, type LaunchRequest,
+  blankRequest, exportText, missingOf, RM, requestTotal, seatDepth, shapeName, shortDate, typeOf, type LaunchRequest,
 } from './marketing-model';
 import { useMarketingOptions } from './marketing-options';
 import { useArriveRequest, useDeleteRequest, useRequestPhoto, type MarketingState } from '../../lib/marketing-api';
-import { SofaBlueprint } from './SofaBlueprint';
+import { SofaLayoutPreview } from './SofaLayoutPreview';
 import { LaunchRequestModal } from './LaunchRequestModal';
 import { ExportModal } from './ExportModal';
 import s from './marketing.module.css';
@@ -86,7 +86,7 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
         <div className={s.reqTop}>
           <div className={s.reqThumb}>
             {r.type === 'sofa' && r.modules.length > 0
-              ? <SofaBlueprint modules={r.modules} maxW={76} maxH={50} />
+              ? <SofaLayoutPreview layout={r.layout} modules={r.modules} depth={seatDepth(r.seat)} art={opts.moduleArt} />
               : <Icon size={26} strokeWidth={1.75} className={s.icon} />}
           </div>
           <div className={s.reqInfo}>

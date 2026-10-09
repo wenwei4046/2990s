@@ -3259,6 +3259,9 @@ export const marketingDisplays = pgTable('marketing_displays', {
   leg:             text('leg').notNull().default(''),
   seat:            text('seat').notNull().default(''),
   modules:         text('modules').array().notNull().default(sql`'{}'::text[]`),
+  // [{ id, moduleId, x, y, rot }] as laid out on the Custom build canvas (0220);
+  // null on a piece recorded before it. Carried from the request by Arrive.
+  layout:          jsonb('layout'),
   size:            text('size').notNull().default(''),
   height:          text('height').notNull().default(''),
   divan:           text('divan').notNull().default(''),
@@ -3281,6 +3284,7 @@ export const marketingDisplays = pgTable('marketing_displays', {
   typeChk: check('marketing_displays_type_chk', sql`${t.type} IN ('sofa', 'mattress', 'bedframe', 'accessory')`),
   qtyChk:  check('marketing_displays_qty_chk', sql`${t.qty} >= 1`),
   sizeChk: check('marketing_displays_size_chk', sql`(${t.lengthCm} IS NULL OR ${t.lengthCm} BETWEEN 1 AND 1000) AND (${t.widthCm} IS NULL OR ${t.widthCm} BETWEEN 1 AND 1000)`),
+  layoutChk: check('marketing_displays_layout_chk', sql`${t.layout} IS NULL OR jsonb_typeof(${t.layout}) = 'array'`),
   idxLive: index('idx_marketing_displays_live').on(t.venueId, t.createdAt).where(sql`${t.removedAt} IS NULL`),
 }));
 
@@ -3313,6 +3317,9 @@ export const marketingLaunchRequests = pgTable('marketing_launch_requests', {
   divan:            text('divan').notNull().default(''),
   gap:              text('gap').notNull().default(''),
   modules:          text('modules').array().notNull().default(sql`'{}'::text[]`),
+  // [{ id, moduleId, x, y, rot }] as laid out on the Custom build canvas (0220);
+  // `modules` is its left-to-right read. null on a request saved before it.
+  layout:           jsonb('layout'),
   // Sofa only (0219). Saving a sofa needs all of them (the API checks); the
   // columns stay nullable / '' so requests saved before 0219 still load.
   lengthCm:         integer('length_cm'),
@@ -3356,6 +3363,7 @@ export const marketingLaunchRequests = pgTable('marketing_launch_requests', {
   sizeChk:   check('marketing_launch_requests_size_chk', sql`(${t.lengthCm} IS NULL OR ${t.lengthCm} BETWEEN 1 AND 1000) AND (${t.widthCm} IS NULL OR ${t.widthCm} BETWEEN 1 AND 1000)`),
   photoChk:  check('marketing_launch_requests_photo_chk', sql`(${t.photoB64} IS NULL AND ${t.photoContentType} IS NULL AND ${t.photoBytes} IS NULL AND ${t.photoUpdatedAt} IS NULL) OR (${t.photoB64} IS NOT NULL AND ${t.photoUpdatedAt} IS NOT NULL AND ${t.photoContentType} IN ('image/png', 'image/jpeg', 'image/webp') AND ${t.photoBytes} > 0 AND ${t.photoBytes} <= 3145728)`),
   matchChk:  check('marketing_launch_requests_match_chk', sql`${t.photoMatch} IN ('', 'exact', 'non_exact')`),
+  layoutChk: check('marketing_launch_requests_layout_chk', sql`${t.layout} IS NULL OR jsonb_typeof(${t.layout}) = 'array'`),
   idxOpen:   index('idx_marketing_launch_requests_open').on(t.status, t.createdAt).where(sql`${t.status} IN ('pending', 'completed')`),
 }));
 

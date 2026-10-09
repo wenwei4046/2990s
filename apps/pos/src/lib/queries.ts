@@ -1173,8 +1173,10 @@ interface MaintenanceCompartmentMeta {
  *   - Worker-uploaded photos (`sofa-compartments/{code}/...`) go through the
  *     public Worker proxy so the POS <img src> works from any origin.
  *   - Legacy bundled paths (`sofa-modules/...`) go through /public.
- *   - Absolute http(s) URLs pass through. */
-function resolveCompartmentPhoto(code: string, imageKey: string | undefined): string | null {
+ *   - Absolute http(s) URLs pass through.
+ *  Exported for the Marketing builder, which resolves the whole master pool
+ *  the same way (components/marketing/marketing-options.ts). */
+export function resolveCompartmentPhoto(code: string, imageKey: string | undefined): string | null {
   if (!imageKey) return null;
   if (/^https?:\/\//i.test(imageKey)) return imageKey;
   if (imageKey.startsWith('sofa-compartments/')) {
@@ -1187,7 +1189,7 @@ function resolveCompartmentPhoto(code: string, imageKey: string | undefined): st
 /** Classify a compartment code into the POS palette group. Mirrors
  *  `classifySofaCompartment` from @2990s/shared. Works on the canonical
  *  parens form (and tolerates a stray legacy dash code). */
-function classifyCompartmentCode(rawCode: string): ResolvedSofaCompartment['group'] {
+export function classifyCompartmentCode(rawCode: string): ResolvedSofaCompartment['group'] {
   const norm = rawCode.trim();
   if (/^L[-(]/i.test(norm) || /^L$/i.test(norm)) return 'L-Shape';
   if (/^CNR$/i.test(norm) || /^CORNER/i.test(norm)) return 'Corner';

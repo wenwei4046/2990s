@@ -249,6 +249,19 @@ describe('displays', () => {
     expect(state.inserted).toMatchObject({ venue_id: '107', type: 'mattress', size: 'King', height: '12', is_new: false, created_by: '41', created_by_name: 'Marketing' });
   });
 
+  it('keeps a sofa’s layout, and gives a mattress none', async () => {
+    meAnswers(MARKETING);
+    const layout = [{ moduleId: '1S', x: 240, y: 190, rot: 270 }];
+    state.single = { id: 'd2', venue_id: '107', type: 'sofa', name: 'BOOQIT', modules: ['1S'], qty: 1, is_new: false, layout };
+    const sofa = await app().request('/marketing/displays', json('POST', { venueId: '107', type: 'sofa', name: 'BOOQIT', modules: ['1S'], layout }), env);
+    expect(sofa.status).toBe(201);
+    expect(state.inserted).toMatchObject({ layout });
+    expect((await sofa.json() as { display: { layout: unknown } }).display.layout).toEqual(layout);
+    state.single = { id: 'd3', venue_id: '107', type: 'mattress', name: 'AKKA', modules: [], qty: 1, is_new: false };
+    await app().request('/marketing/displays', json('POST', { venueId: '107', type: 'mattress', name: 'AKKA', layout }), env);
+    expect(state.inserted).toMatchObject({ layout: null });
+  });
+
   it('removes by stamping, not deleting', async () => {
     meAnswers(MARKETING);
     state.maybe = { id: '6f1f6c1e-0000-4000-8000-000000000001' };
@@ -388,7 +401,46 @@ describe('launch requests', () => {
     state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', modules: [], combo_rows: [{ modules: ['2A(LHF)'], price: null }] };
     const res = await app().request('/marketing/requests', json('POST', { ...base, rows: [{ modules: ['2A(LHF)'], price: null }] }), env);
     const body = await res.json() as { request: { rows: unknown[] } };
-    expect(body.request.rows).toEqual([{ modules: ['2A(LHF)'], price: null }]);
+    expect(body.request.rows).toEqual([{ modules: ['2A(LHF)'], price: null, layout: null }]);
+  });
+
+  /* 0220: the sofa as laid out on the Custom build canvas. */
+  const LAYOUT = [
+    { id: 'c1', moduleId: '2A(LHF)', x: 152.5, y: 192.5, rot: 90 },
+    { id: 'c2', moduleId: 'L(RHF)', x: 152.5, y: 337.5, rot: 180 },
+  ];
+
+  it('stores the layout, and each combo’s, as laid out', async () => {
+    meAnswers(MARKETING);
+    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    const res = await app().request('/marketing/requests', json('POST', {
+      ...base, modules: ['2A(LHF)', 'L(RHF)'], layout: LAYOUT,
+      rows: [{ modules: ['2A(LHF)', 'L(RHF)'], price: 3540, layout: LAYOUT }],
+    }), env);
+    expect(res.status).toBe(201);
+    expect(state.inserted).toMatchObject({ layout: LAYOUT, combo_rows: [{ modules: ['2A(LHF)', 'L(RHF)'], price: 3540, layout: LAYOUT }] });
+  });
+
+  it('refuses a layout cell turned anything but a quarter turn', async () => {
+    meAnswers(MARKETING);
+    const res = await app().request('/marketing/requests', json('POST', {
+      ...base, layout: [{ moduleId: '2A(LHF)', x: 0, y: 0, rot: 45 }],
+    }), env);
+    expect(res.status).toBe(400);
+    expect(state.inserted).toBeNull();
+  });
+
+  it('reads a layout back, dropping a malformed cell and keeping none as null', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_launch_requests = {
+      list: [
+        { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [], layout: [...LAYOUT, { moduleId: '', x: 'x', rot: 7 }] },
+        { id: 'r2', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: ['1S'], layout: null },
+      ],
+    };
+    const res = await app().request('/marketing/state', { headers: auth }, env);
+    const body = await res.json() as { requests: Array<{ id: string; layout: unknown }> };
+    expect(body.requests.map((r) => r.layout)).toEqual([LAYOUT, null]);
   });
 
   it('serves a request photo with its Exact / Non-exact note, or null', async () => {

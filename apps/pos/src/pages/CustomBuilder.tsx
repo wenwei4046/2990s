@@ -308,6 +308,17 @@ interface CustomBuilderProps {
   addToOrderPending?: boolean;
   /** When in add-to-order mode, true if the target SO is eligible for adds. */
   addEligible?: boolean;
+  /** Marketing's New product form (owner 2026-10-09: "same as the original
+   *  space planning — can rotate and edit"). The SAME canvas — drag, snap,
+   *  rotate, whole-sofa select, Edit modules, dims, the arm check, auto-flip,
+   *  Expand room — laying out a sofa that is being BOUGHT, not sold. So
+   *  nothing that prices or sells shows: no palette prices, no fabric picker
+   *  (`railBlock` takes its place), no depth chip, no Quick Pick / Combo
+   *  saving, no price bar. And the canonical auto-convert stays OFF: it
+   *  rewrites a build into a combo's SKU breakdown so the combo price
+   *  matches, but procurement needs exactly the compartments laid out. The
+   *  parent owns `cells`, as it always does, and saves them itself. */
+  layoutOnly?: { railBlock?: ReactNode };
 }
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
@@ -331,7 +342,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly }: CustomBuilderProps) => {
   const isPhone = useMediaQuery('(max-width: 767px)');
   const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
   const paletteRef = useRef<HTMLDialogElement>(null);
@@ -813,6 +824,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // SAME number of compartments, never merge two of them into one.
   useEffect(() => {
     if (draftDelta) return; // don't rewrite mid-drag
+    // Laying out a sofa to BUY (Marketing): the compartments chosen are the
+    // order, so never swap them for a combo's breakdown (owner 2026-10-09).
+    if (layoutOnly) return;
     type ConvertOp = { removeIds: Set<string>; addCells: Cell[] };
     const ops: ConvertOp[] = [];
     priceResult.groups.forEach((g, i) => {
@@ -854,7 +868,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     });
     setSelectedId(null);
     setSelectedGroupIds(null);
-  }, [priceResult, analyses, draftDelta, editingGroupIds, depth]);
+  }, [priceResult, analyses, draftDelta, editingGroupIds, depth, layoutOnly]);
   const violationCellIds = useMemo(() => {
     const set = new Set<string>();
     for (const a of analyses) {
@@ -1245,7 +1259,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                               ? customRow.label
                               : m.label.replace(`${m.id} · `, '')}
                           </div>
-                          <div className={styles.palettePrice}>{priceRm != null ? fmtRM(priceRm) : 'TBC'}</div>
+                          {!layoutOnly && <div className={styles.palettePrice}>{priceRm != null ? fmtRM(priceRm) : 'TBC'}</div>}
                         </div>
                         <span className={styles.paletteAdd} aria-hidden>+</span>
                       </button>
@@ -1256,21 +1270,23 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             });
           })()}
         </div>
-        <FabricColourPicker
-          productFabrics={fabricSeriesRows}
-          fabricId={fabricSel?.fabricId ?? null}
-          colourId={fabricSel?.colourId ?? null}
-          onChange={(next) => {
-            setFabricSel(next);
-            onFabricChange?.(next);
-          }}
-          category="SOFA"
-          addonConfig={addonCfgQ.data ?? null}
-          modelOverride={modelFabricOverride}
-          enabledColourIds={productId?.startsWith('mfg-') ? fabricCodes : null}
-          optional
-          onClear={() => { setFabricSel(null); onFabricChange?.(null); }}
-        />
+        {layoutOnly ? layoutOnly.railBlock : (
+          <FabricColourPicker
+            productFabrics={fabricSeriesRows}
+            fabricId={fabricSel?.fabricId ?? null}
+            colourId={fabricSel?.colourId ?? null}
+            onChange={(next) => {
+              setFabricSel(next);
+              onFabricChange?.(next);
+            }}
+            category="SOFA"
+            addonConfig={addonCfgQ.data ?? null}
+            modelOverride={modelFabricOverride}
+            enabledColourIds={productId?.startsWith('mfg-') ? fabricCodes : null}
+            optional
+            onClear={() => { setFabricSel(null); onFabricChange?.(null); }}
+          />
+        )}
         {legBlock}
         {remarkBlock}
       </dialog>
@@ -1284,10 +1300,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             <SlidersHorizontal size={18} strokeWidth={1.75} /> Options &amp; promo
           </Button>
         </div>
-        <div className={styles.mobilePreviewPrice}>
-          {allClosed && cells.length > 0 ? 'Total ' : 'Provisional '}
-          {fmtRM(priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm)}
-        </div>
+        {!layoutOnly && (
+          <div className={styles.mobilePreviewPrice}>
+            {allClosed && cells.length > 0 ? 'Total ' : 'Provisional '}
+            {fmtRM(priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm)}
+          </div>
+        )}
         <header className={styles.canvasHead}>
           <div>
             <span className="t-eyebrow">Custom build · drag to lay out</span>
@@ -1296,7 +1314,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             </h2>
           </div>
           <div className={styles.headTools}>
-            <span className={styles.depthChip}>{depth}″ seat</span>
+            {!layoutOnly && <span className={styles.depthChip}>{depth}″ seat</span>}
             <button
               type="button"
               className={styles.clearBtn}
@@ -1912,7 +1930,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
               );
             });
           })()}
-          {cells.length > 0 && allClosed && (
+          {cells.length > 0 && allClosed && !layoutOnly && (
             <div className={styles.mobileToolRow}>
               <Button variant="ghost" onClick={() => setSaveComboOpen(true)}>Save as Quick Pick</Button>
               {canCurate && (baseModel ?? '').trim() !== '' && (
@@ -1922,7 +1940,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           )}
         </div>
 
-        <footer className={styles.priceBar}>
+        {!layoutOnly && <footer className={styles.priceBar}>
           <div>
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
             {/* extraAmountRm is per-unit on the LEAD group only (see handleAdd),
@@ -2000,7 +2018,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                           : 'Add to cart'}
             </Button>
           </div>
-        </footer>
+        </footer>}
         {saveComboOpen && (
           <SaveQuickPickModal
             modules={orderSofaCellsLeftToRight(cells, depth).map((c) => c.moduleId)}

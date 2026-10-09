@@ -6,14 +6,14 @@
 import { useMemo, useState, type ChangeEvent } from 'react';
 import { ImageUp, Pencil, Plus, Store, Trash2, Upload, X } from 'lucide-react';
 import {
-  detailRows, moduleInfo, shapeName, specOf, tagsOf, typeOf, TYPES,
+  detailRows, moduleInfo, seatDepth, shapeName, specOf, tagsOf, typeOf, TYPES,
   type DisplayItem, type DisplayType,
 } from './marketing-model';
 import { useMarketingOptions, type MarketingOptions } from './marketing-options';
 import {
   prepareFloorplan, useDeleteFloorplan, useFloorplan, usePutFloorplan, useRemoveDisplay, useRequestPhoto, type MarketingState,
 } from '../../lib/marketing-api';
-import { SofaBlueprint } from './SofaBlueprint';
+import { SofaLayoutPreview } from './SofaLayoutPreview';
 import { AddDisplayModal } from './AddDisplayModal';
 import { ShowroomDialog } from './ShowroomDialog';
 import s from './marketing.module.css';
@@ -285,7 +285,9 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrawerId(it.id); } }}
                     >
                       <div className={s.displayPic} style={bg(photo)}>
-                        {it.type === 'sofa' && <SofaBlueprint modules={it.modules} maxW={180} maxH={100} />}
+                        {it.type === 'sofa' && (
+                          <SofaLayoutPreview layout={it.layout} modules={it.modules} depth={seatDepth(it.seat)} art={opts.moduleArt} pad={18} />
+                        )}
                         {it.type !== 'sofa' && !photo && <span className={s.initialArt}>{initialOf(it.name)}</span>}
                         {it.isNew && <span className={s.newPill}>New</span>}
                         {it.type === 'sofa' && <span className={s.shapePill}>{shapeName(it.modules)}</span>}
@@ -333,7 +335,9 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
             </div>
             <div className={s.drawerBody}>
               <div className={s.drawerPic} style={bg(photoOf(drawer.it, opts))}>
-                {drawer.it.type === 'sofa' && <SofaBlueprint modules={drawer.it.modules} maxW={400} maxH={200} showLabels />}
+                {drawer.it.type === 'sofa' && (
+                  <SofaLayoutPreview layout={drawer.it.layout} modules={drawer.it.modules} depth={seatDepth(drawer.it.seat)} art={opts.moduleArt} dims />
+                )}
                 {drawer.it.type !== 'sofa' && !photoOf(drawer.it, opts) && <span className={s.drawerInitial}>{initialOf(drawer.it.name)}</span>}
               </div>
               <div>

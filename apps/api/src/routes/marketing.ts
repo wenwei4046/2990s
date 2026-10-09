@@ -92,6 +92,30 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** A sofa's length or width, whole cm (0219). */
 const cm = z.number().int().min(1).max(1000);
 
+/** A sofa as laid out on the POS Custom build canvas (0220, owner 2026-10-09):
+ *  each compartment with its position (cm, in the canvas room) and rotation.
+ *  Stored as given — the canvas is what makes it a sofa; here it only has to
+ *  be a well-formed list. */
+const layoutCell = z.object({
+  id: z.string().trim().max(64).optional(),
+  moduleId: moduleCode,
+  x: z.number().finite().min(-10_000).max(10_000),
+  y: z.number().finite().min(-10_000).max(10_000),
+  rot: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
+});
+const layout = z.array(layoutCell).max(30).nullable().optional().default(null);
+type LayoutCell = z.infer<typeof layoutCell>;
+
+/** Read a stored layout back, keeping only well-formed cells; null when none. */
+const layoutToWire = (raw: unknown): LayoutCell[] | null => {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const cells = raw.flatMap((c) => {
+    const p = layoutCell.safeParse(c);
+    return p.success ? [p.data] : [];
+  });
+  return cells.length ? cells : null;
+};
+
 /** Postgres unique_violation. */
 const isDuplicate = (e: { code?: string } | null): boolean => e?.code === '23505';
 
@@ -150,7 +174,7 @@ async function listedShowroom(c: Ctx, sb: SupabaseClient, id: string): Promise<R
 
 const DISPLAY_SELECT =
   'id, venue_id, type, model_id, name, code, photo_url, is_new, fabric, colour, leg, seat, ' +
-  'modules, size, height, divan, gap, qty, length_cm, width_cm, sofa_category, sofa_function, ' +
+  'modules, layout, size, height, divan, gap, qty, length_cm, width_cm, sofa_category, sofa_function, ' +
   'source_request_id, created_at, created_by_name';
 
 const cmOrNull = (v: unknown): number | null => (v == null ? null : Number(v));
@@ -169,6 +193,7 @@ const displayToWire = (r: Record<string, unknown>) => ({
   leg: String(r.leg ?? ''),
   seat: String(r.seat ?? ''),
   modules: Array.isArray(r.modules) ? (r.modules as unknown[]).map(String) : [],
+  layout: layoutToWire(r.layout),
   size: String(r.size ?? ''),
   height: String(r.height ?? ''),
   divan: String(r.divan ?? ''),
@@ -197,6 +222,7 @@ const displayCreateSchema = z.object({
   leg: short.optional().default(''),
   seat: short.optional().default(''),
   modules: modules.optional().default([]),
+  layout,
   size: short.optional().default(''),
   height: short.optional().default(''),
   divan: short.optional().default(''),
@@ -215,17 +241,17 @@ const displayCreateSchema = z.object({
 // photo is read one request at a time (GET /requests/:id/photo).
 const REQUEST_SELECT =
   'id, type, status, supplier_code, model, fabric, colour, leg, seat, size, height, divan, gap, ' +
-  'modules, length_cm, width_cm, sofa_category, sofa_function, photo_match, photo_note, photo_updated_at, ' +
+  'modules, layout, length_cm, width_cm, sofa_category, sofa_function, photo_match, photo_note, photo_updated_at, ' +
   'combo_rows, venue_id, action, replace_display_id, requested_by_name, requested_by_role, created_at, updated_at';
 
-type ComboRow = { modules: string[]; price: number | null };
+type ComboRow = { modules: string[]; price: number | null; layout: LayoutCell[] | null };
 
 const rowsToWire = (raw: unknown): ComboRow[] =>
   Array.isArray(raw)
     ? raw.map((x) => {
-        const o = (x ?? {}) as { modules?: unknown; price?: unknown };
+        const o = (x ?? {}) as { modules?: unknown; price?: unknown; layout?: unknown };
         const price = typeof o.price === 'number' && Number.isFinite(o.price) ? o.price : null;
-        return { modules: Array.isArray(o.modules) ? o.modules.map(String) : [], price };
+        return { modules: Array.isArray(o.modules) ? o.modules.map(String) : [], price, layout: layoutToWire(o.layout) };
       })
     : [];
 
@@ -244,6 +270,7 @@ const requestToWire = (r: Record<string, unknown>) => ({
   divan: String(r.divan ?? ''),
   gap: String(r.gap ?? ''),
   modules: Array.isArray(r.modules) ? (r.modules as unknown[]).map(String) : [],
+  layout: layoutToWire(r.layout),
   lengthCm: cmOrNull(r.length_cm),
   widthCm: cmOrNull(r.width_cm),
   sofaCategory: String(r.sofa_category ?? ''),
@@ -267,6 +294,8 @@ const comboRow = z.object({
   // Whole RM, reference only. null = not typed yet (a pending request may
   // carry a combo without its price).
   price: z.number().min(0).max(10_000_000).nullable(),
+  // The combo as laid out on the canvas (0220); null on one saved before it.
+  layout,
 });
 
 const requestBodySchema = z.object({
@@ -283,6 +312,8 @@ const requestBodySchema = z.object({
   divan: short.optional().default(''),
   gap: short.optional().default(''),
   modules: modules.optional().default([]),
+  // The sofa as laid out on the canvas (0220); `modules` is its left-to-right read.
+  layout,
   rows: z.array(comboRow).max(30).optional().default([]),
   // Sofa only (0219). Required to save a sofa — see saveGaps.
   lengthCm: cm.nullable().optional().default(null),
@@ -380,6 +411,7 @@ const requestColumns = (b: RequestBody) => ({
   divan: b.divan,
   gap: b.gap,
   modules: b.modules,
+  layout: b.layout,
   length_cm: b.lengthCm,
   width_cm: b.widthCm,
   sofa_category: b.sofaCategory,
@@ -585,6 +617,7 @@ marketing.post('/displays', async (c) => {
       leg: v.leg,
       seat: v.seat,
       modules: v.modules,
+      layout: v.type === 'sofa' ? v.layout : null,
       size: v.size,
       height: v.height,
       divan: v.divan,
