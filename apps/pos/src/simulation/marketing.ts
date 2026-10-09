@@ -33,7 +33,7 @@ export const simulationPersona = (): SimulationPersona => {
 
 const display = (id: string, venueId: string, type: string, name: string, code: string, photoUrl: string | null, extra: Row = {}): Row => ({
   id, venue_id: venueId, type, model_id: null, name, code, photo_url: photoUrl, is_new: false, fabric: '', colour: '', leg: '', seat: '',
-  modules: [], size: '', height: '', divan: '', gap: '', qty: 1, length_cm: null, width_cm: null, sofa_category: '', sofa_function: '',
+  modules: [], layout: null, size: '', height: '', divan: '', gap: '', qty: 1, length_cm: null, width_cm: null, sofa_category: '', sofa_function: '',
   source_request_id: null, created_at: '2026-10-01T02:00:00.000Z', created_by_name: 'Demo', removed_at: null, ...extra,
 });
 
@@ -120,20 +120,20 @@ const showroomWire = (r: Row) => ({ id: r.id, name: r.name, area: r.area });
 const displayWire = (r: Row) => ({
   id: r.id, venueId: r.venue_id, type: r.type, modelId: r.model_id, name: r.name, code: r.code, photoUrl: r.photo_url, isNew: r.is_new,
   fabric: r.fabric, colour: r.colour, leg: r.leg, seat: r.seat, modules: r.modules, size: r.size, height: r.height, divan: r.divan,
-  gap: r.gap, qty: r.qty, lengthCm: r.length_cm ?? null, widthCm: r.width_cm ?? null, sofaCategory: r.sofa_category ?? '',
+  gap: r.gap, qty: r.qty, layout: r.layout ?? null, lengthCm: r.length_cm ?? null, widthCm: r.width_cm ?? null, sofaCategory: r.sofa_category ?? '',
   sofaFunction: r.sofa_function ?? '', sourceRequestId: r.source_request_id ?? null, createdAt: r.created_at, createdByName: r.created_by_name,
 });
 const requestWire = (r: Row) => ({
   id: r.id, type: r.type, status: r.status, supplierCode: r.supplier_code, model: r.model, fabric: r.fabric, colour: r.colour, leg: r.leg,
-  seat: r.seat, size: r.size, height: r.height, divan: r.divan, gap: r.gap, modules: r.modules, rows: r.combo_rows, venueId: r.venue_id,
-  lengthCm: r.length_cm ?? null, widthCm: r.width_cm ?? null, sofaCategory: r.sofa_category ?? '', sofaFunction: r.sofa_function ?? '',
+  seat: r.seat, size: r.size, height: r.height, divan: r.divan, gap: r.gap, modules: r.modules, layout: r.layout ?? null,
+  rows: r.combo_rows, venueId: r.venue_id, lengthCm: r.length_cm ?? null, widthCm: r.width_cm ?? null, sofaCategory: r.sofa_category ?? '', sofaFunction: r.sofa_function ?? '',
   photoMatch: r.photo_match ?? '', photoNote: r.photo_note ?? '', photoAt: photos()[r.id]?.updated_at ?? null,
   action: r.action, replaceId: r.replace_display_id, by: r.requested_by_name, byRole: r.requested_by_role, createdAt: r.created_at, updatedAt: r.created_at,
 });
 const requestCols = (b: Row) => ({
   type: b.type, status: b.status, supplier_code: b.supplierCode ?? '', model: b.model ?? '', fabric: b.fabric ?? '', colour: b.colour ?? '',
   leg: b.leg ?? '', seat: b.seat ?? '', size: b.size ?? '', height: b.height ?? '', divan: b.divan ?? '', gap: b.gap ?? '',
-  modules: b.modules ?? [], length_cm: b.lengthCm ?? null, width_cm: b.widthCm ?? null, sofa_category: b.sofaCategory ?? '',
+  modules: b.modules ?? [], layout: b.layout ?? null, length_cm: b.lengthCm ?? null, width_cm: b.widthCm ?? null, sofa_category: b.sofaCategory ?? '',
   sofa_function: b.sofaFunction ?? '', photo_match: b.photoMatch ?? '', photo_note: b.photoMatch === 'non_exact' ? (b.photoNote ?? '') : '',
   combo_rows: b.rows ?? [], venue_id: b.venueId, action: b.action,
   replace_display_id: b.action === 'replace' ? (b.replaceId ?? null) : null,
@@ -278,7 +278,7 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
     if (body.type === 'sofa' && !(body.modules ?? []).length) return json({ error: 'validation_failed', reason: 'A sofa needs its components.' }, 400);
     const row = display(`sim-d${st.serial++}`, body.venueId, body.type, body.name, body.code ?? '', body.photoUrl ?? null, {
       model_id: body.modelId ?? null, fabric: body.fabric ?? '', colour: body.colour ?? '', leg: body.leg ?? '', seat: body.seat ?? '',
-      modules: body.modules ?? [], size: body.size ?? '', height: body.height ?? '', divan: body.divan ?? '', gap: body.gap ?? '',
+      modules: body.modules ?? [], layout: body.type === 'sofa' ? (body.layout ?? null) : null, size: body.size ?? '', height: body.height ?? '', divan: body.divan ?? '', gap: body.gap ?? '',
       qty: body.qty ?? 1, created_at: now(), created_by_name: me.name,
     });
     st.displays.push(row); save();
@@ -330,7 +330,7 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
         if (old) { old.removed_at = now(); removedName = old.name; }
       }
       const created = display(`sim-d${st.serial++}`, row.venue_id, row.type, row.model, row.supplier_code, null, {
-        is_new: true, fabric: row.fabric, colour: row.colour, leg: row.leg, seat: row.seat, modules: row.modules, size: row.size,
+        is_new: true, fabric: row.fabric, colour: row.colour, leg: row.leg, seat: row.seat, modules: row.modules, layout: row.layout ?? null, size: row.size,
         height: row.height, divan: row.divan, gap: row.gap, length_cm: row.length_cm ?? null, width_cm: row.width_cm ?? null,
         sofa_category: row.sofa_category ?? '', sofa_function: row.sofa_function ?? '', source_request_id: row.id,
         created_at: now(), created_by_name: me.name,

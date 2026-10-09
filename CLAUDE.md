@@ -449,7 +449,7 @@ keeps the option lists that have no SKU Master source.
 
 | Piece | Home | Why |
 |---|---|---|
-| Displays, floor plans, launch requests | **2990's Supabase** (migrations `0217`, `0219`), via `apps/api/src/routes/marketing.ts` | Houzs has no such tables and we can't add them |
+| Displays, floor plans, launch requests | **2990's Supabase** (migrations `0217`, `0219`, `0220`), via `apps/api/src/routes/marketing.ts` | Houzs has no such tables and we can't add them |
 | Sofa Category → Function lists | **2990's Supabase** `marketing_sofa_options` (migration `0219`) — kept in ⋯ › Maintenance | owner 2026-10-09: fabric, leg and seat come from the SKU Master; these have no source, so Marketing keeps them. A request stores the NAME, so renaming or removing an option never changes a saved request |
 | Sales lines | **Houzs** `GET /api/scm/sales-analysis/lines` (their `scm/lib/sales-lines.ts`) | the orders live there |
 | Showroom list | **2990's Supabase** `marketing_showrooms` (migration `0218`) — added, renamed and removed in the Showroom display tab | owner 2026-10-09: it is a record of what is on each floor, not the order form's branch list. Until 0218 it was Houzs `/venues`; `venue_id` kept its name but is now a FK to this table |
@@ -459,7 +459,19 @@ piece on display or an open launch request** (the dialog says so before the
 server does). Sales analysis does not use this list: its showroom filter is the
 venue each Houzs order was placed at.
 
-**Eight things that will bite you:**
+**Nine things that will bite you:**
+- 🔑 **The Marketing "Build components" canvas IS the POS Custom build** —
+  `pages/CustomBuilder.tsx` with its `layoutOnly` prop (owner 2026-10-09:
+  "same as the original space planning — can rotate and edit"). Same drag /
+  snap / rotate / whole-sofa / Edit modules / dims / arm check; no prices,
+  no price bar, no fabric picker, no Quick Pick / Combo saving. And the
+  **canonical auto-convert is OFF** there (owner: it exists to match combo
+  pricing; Marketing is buying, so the compartments laid out are the order).
+  A change to CustomBuilder lands in both places — check `layoutOnly` still
+  hides what sells (`CustomBuilder.layout-only.test.tsx`). The layout is
+  stored as cells (`layout` jsonb, migration `0220`) next to the
+  left-to-right `modules`, and every Marketing sofa preview draws it through
+  `SofaCellsPreview` (`tileBundles={false}`, so it looks like the canvas).
 - 🔑 **Saving a launch request at all — even to Pending Info — needs more than
   the design said** (owner 2026-10-09, #806): the supplier code on every
   category, and on a sofa its size (L × W, whole cm), photo (marked Exact or

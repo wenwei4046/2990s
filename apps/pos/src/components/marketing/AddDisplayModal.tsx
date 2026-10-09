@@ -4,14 +4,14 @@
 
 import { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
-import { compLine, shapeName, sizeName, specOf, TYPES, type DisplayType } from './marketing-model';
+import { compLine, seatDepth, shapeName, sizeName, specOf, TYPES, type DisplayType, type SofaLayout } from './marketing-model';
 import {
   allowedOr, coloursOf, fabricsFor, preferred,
   type MarketingOptions, type ModelOption,
 } from './marketing-options';
 import { useAddDisplay, type ShowroomOption } from '../../lib/marketing-api';
 import { ComponentBuilder } from './ComponentBuilder';
-import { SofaBlueprint } from './SofaBlueprint';
+import { SofaLayoutPreview } from './SofaLayoutPreview';
 import s from './marketing.module.css';
 
 interface AddState {
@@ -26,6 +26,8 @@ interface AddState {
   divan: string;
   gap: string;
   modules: string[];
+  /** The sofa as laid out on the canvas (0220). */
+  layout: SofaLayout | null;
   qty: number;
 }
 
@@ -55,7 +57,7 @@ function freshAdd(opts: MarketingOptions, type: DisplayType): AddState {
   return {
     type, modelId: model?.id ?? '', size: preferred(l.sizes, 'Queen'), height: '',
     fabric, colour: l.coloursOf(fabric)[0] ?? '', leg: preferred(l.legs, '4"'), seat: preferred(l.seats, '28"'),
-    divan: preferred(l.divans, '10"'), gap: '', modules: [], qty: 1,
+    divan: preferred(l.divans, '10"'), gap: '', modules: [], layout: null, qty: 1,
   };
 }
 
@@ -100,7 +102,7 @@ export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
     if (isSofa && !a.modules.length) { setBuilding(true); return; }
     if (!model) return;
     setErr('');
-    const extra = a.type === 'sofa' ? { fabric: a.fabric, colour: a.colour, leg: a.leg, seat: a.seat, modules: a.modules }
+    const extra = a.type === 'sofa' ? { fabric: a.fabric, colour: a.colour, leg: a.leg, seat: a.seat, modules: a.modules, layout: a.layout }
       : a.type === 'mattress' ? { size: a.size, height: a.height.trim() }
       : a.type === 'bedframe' ? { size: a.size, fabric: a.fabric, colour: a.colour, leg: a.leg, divan: a.divan, gap: a.gap.trim() }
       : { qty: a.qty };
@@ -246,7 +248,7 @@ export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
 
             <div className={s.modalRight}>
               <div className={s.previewPane} style={photo ? { backgroundImage: `url("${photo}")` } : undefined}>
-                {isSofa && <SofaBlueprint modules={a.modules} maxW={280} maxH={150} showLabels />}
+                {isSofa && <SofaLayoutPreview layout={a.layout} modules={a.modules} depth={seatDepth(a.seat)} art={opts.moduleArt} dims />}
               </div>
               <div>
                 <div className={s.previewName}>{preview.name}</div>
@@ -265,8 +267,9 @@ export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
       {building && (
         <ComponentBuilder
           context={`Add on display · ${showroom.name}`}
-          initial={a.modules}
-          modules={opts.modules}
+          initialLayout={a.layout}
+          initialModules={a.modules}
+          pool={opts.sofaPool}
           seats={l.seats}
           seat={a.seat}
           onSeat={(v) => set({ seat: v })}
@@ -280,7 +283,7 @@ export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
           leg={a.leg}
           onLeg={(v) => set({ leg: v })}
           onCancel={() => setBuilding(false)}
-          onSave={(mods) => { set({ modules: mods }); setBuilding(false); }}
+          onSave={({ layout, modules }) => { set({ modules, layout }); setBuilding(false); }}
         />
       )}
     </>

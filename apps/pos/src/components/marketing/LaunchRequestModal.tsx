@@ -8,15 +8,15 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { ImageUp, Pencil, Upload, X } from 'lucide-react';
 import {
-  cmOf, compLine, hasPhoto, missingOf, RM, requestTotal, saveBlockersOf, saveMissingOf, shapeName, specOf, TYPES,
+  cmOf, compLine, hasPhoto, missingOf, RM, requestTotal, saveBlockersOf, saveMissingOf, seatDepth, shapeName, specOf, TYPES,
   type DisplayItem, type LaunchRequest, type RequestStatus, type RequestType,
 } from './marketing-model';
 import { coloursOf, withValue, type MarketingOptions } from './marketing-options';
 import {
   preparePhoto, useRequestPhoto, useSaveRequest, type ShowroomOption, type SofaCategoryOption,
 } from '../../lib/marketing-api';
-import { ComponentBuilder } from './ComponentBuilder';
-import { SofaBlueprint } from './SofaBlueprint';
+import { ComponentBuilder, type BuiltSofa } from './ComponentBuilder';
+import { SofaLayoutPreview } from './SofaLayoutPreview';
 import s from './marketing.module.css';
 
 type BuilderTarget = { target: 'draft' } | { target: 'combo'; idx: number };
@@ -136,18 +136,21 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
     }
   };
 
-  const saveBuilt = (mods: string[]) => {
+  const saveBuilt = ({ layout, modules }: BuiltSofa) => {
     if (!builder) return;
     if (builder.target === 'combo') {
       const rows = [...d.rows];
-      if (builder.idx >= 0) rows[builder.idx] = { ...rows[builder.idx]!, modules: mods };
-      else rows.push({ modules: mods, price: '' });
+      if (builder.idx >= 0) rows[builder.idx] = { ...rows[builder.idx]!, modules, layout };
+      else rows.push({ modules, layout, price: '' });
       patch({ rows });
     } else {
-      patch({ modules: mods, rows: d.rows.length ? d.rows : [{ modules: mods, price: '' }] });
+      patch({ modules, layout, rows: d.rows.length ? d.rows : [{ modules, layout, price: '' }] });
     }
     setBuilder(null);
   };
+
+  const depth = seatDepth(d.seat);
+  const art = opts.moduleArt;
 
   return (
     <>
@@ -215,7 +218,9 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                         </select>
                         <div className={s.replacePreview}>
                           {rep?.type === 'sofa' && (
-                            <div className={s.replaceThumb}><SofaBlueprint modules={rep.modules} maxW={84} maxH={44} /></div>
+                            <div className={s.replaceThumb}>
+                              <SofaLayoutPreview layout={rep.layout} modules={rep.modules} depth={seatDepth(rep.seat)} art={art} />
+                            </div>
                           )}
                           <span className={s.replaceText}>
                             <span className={s.replaceName}>{rep?.name ?? ''}</span>
@@ -231,7 +236,9 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
 
               {isSofa && (
                 <div className={`${s.stepCard} ${s.stepCardBordered}`}>
-                  <div className={s.stepThumb}><SofaBlueprint modules={d.modules} maxW={132} maxH={70} /></div>
+                  <div className={s.stepThumb}>
+                    <SofaLayoutPreview layout={d.layout} modules={d.modules} depth={depth} art={art} pad={6} />
+                  </div>
                   <div className={s.stepText}>
                     <span className={s.fieldLabel}>Step 1 · Components<ToFill on={nd(!d.modules.length)} /></span>
                     <span className={s.stepShape}>{shapeName(d.modules)}</span>
@@ -447,7 +454,9 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                     {d.rows.map((r, i) => (
                       <div key={i} className={`${s.comboGrid} ${s.comboRow}`}>
                         <span className={s.comboN}>{i + 1}</span>
-                        <div className={s.comboThumb}><SofaBlueprint modules={r.modules} maxW={104} maxH={46} /></div>
+                        <div className={s.comboThumb}>
+                          <SofaLayoutPreview layout={r.layout} modules={r.modules} depth={depth} art={art} />
+                        </div>
                         <span className={s.comboText}>
                           <span className={s.comboShape}>{shapeName(r.modules)}</span>
                           <span className={s.comboLine}>{r.modules.join(' + ')}</span>
@@ -490,7 +499,9 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
             <div className={s.modalRight}>
               {isSofa && (
                 <>
-                  <div className={s.previewPlain}><SofaBlueprint modules={d.modules} maxW={280} maxH={150} showLabels /></div>
+                  <div className={s.previewPlain}>
+                    <SofaLayoutPreview layout={d.layout} modules={d.modules} depth={depth} art={art} dims />
+                  </div>
                   <div className={s.previewShape}>{shapeName(d.modules)}</div>
                 </>
               )}
@@ -518,9 +529,10 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
 
       {builder && (
         <ComponentBuilder
-          context={builder.target === 'combo' ? 'Combo price · pick the components for this combo' : 'New product launch · Sofa'}
-          initial={builder.target === 'combo' ? (builder.idx >= 0 ? d.rows[builder.idx]?.modules ?? [] : []) : d.modules}
-          modules={opts.modules}
+          context={builder.target === 'combo' ? 'Combo price · lay out the components for this combo' : 'New product launch · Sofa'}
+          initialLayout={builder.target === 'combo' ? (builder.idx >= 0 ? d.rows[builder.idx]?.layout : null) : d.layout}
+          initialModules={builder.target === 'combo' ? (builder.idx >= 0 ? d.rows[builder.idx]?.modules ?? [] : []) : d.modules}
+          pool={opts.sofaPool}
           seats={seatOpts}
           seat={d.seat}
           onSeat={(v) => patch({ seat: v })}

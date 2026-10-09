@@ -17,7 +17,20 @@ interface Props {
    *  across the seat-size toggle so the WIDTH visibly extends as the seat grows.
    *  Omitted (rail cards) → fit-to-box (width binds, height follows). */
   anchorAspect?: number;
+  /** Where a module's art comes from. Defaults to the bundled PNG — the
+   *  Quick Pick presets. The Marketing previews pass the same Maintenance-
+   *  resolved art the Custom build canvas draws with. */
+  artSrc?: (moduleId: string) => string;
+  /** false → a closed plain bundle draws as ONE code-drawn sofa (the group
+   *  renderer below), as the Custom build canvas draws any build that is not
+   *  a bundle's exact canonical breakdown. Default true keeps the Quick Pick
+   *  cards' per-module tiling. The Marketing previews pass false: their
+   *  layouts come off the canvas as laid out, never re-expressed as a
+   *  canonical bundle, so tiling them would not look like the canvas. */
+  tileBundles?: boolean;
 }
+
+const bundledPng = (moduleId: string): string => `${ASSET_BASE}/${moduleId}.png`;
 
 // Dimension-line styling — inline port of the .qpDim family in
 // Configurator.module.css so the composed-preview hero (2WC/CORNER) gets the
@@ -41,15 +54,15 @@ const dimUnit: CSSProperties = { fontWeight: 400, fontSize: 10, marginLeft: 2, o
  * whose aspect-ratio is the layout's cm bbox; cells positioned in %; rotated
  * modules draw their native art centred then rotated (same math as the canvas).
  */
-export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspect }: Props) => {
+export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspect, artSrc = bundledPng, tileBundles = true }: Props) => {
   // Re-render once each module's silhouette bbox has been measured.
   const [, bump] = useState(0);
   useEffect(() => {
     let live = true;
-    const srcs = Array.from(new Set(cells.map((c) => `${ASSET_BASE}/${c.moduleId}.png`)));
+    const srcs = Array.from(new Set(cells.map((c) => artSrc(c.moduleId))));
     void Promise.all(srcs.map(measureArtBbox)).then(() => { if (live) bump((n) => n + 1); });
     return () => { live = false; };
-  }, [cells]);
+  }, [cells, artSrc]);
 
   const bb = cellsBbox(cells, depth);
   if (!bb || bb.w <= 0 || bb.h <= 0) return null;
@@ -82,7 +95,7 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
   // P-variants→plain, but those need the code-drawn bench / badge (and they hit
   // the seamless gate above anyway when contiguous).
   const sofaOnly = cells.filter((c) => !isAccessoryModule(c.moduleId));
-  const closedPlainBundle = !corner && !seamless
+  const closedPlainBundle = tileBundles && !corner && !seamless
     && cells.every((c) => (c.rot ?? 0) % 360 === 0)
     && !cells.some((c) => isFunctionalSeat(c.moduleId) || isWideArmSeat(c.moduleId))
     && sofaOnly.length >= 2
@@ -133,12 +146,12 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
       {corner && renderCornerSofa(corner.geo)}
       {seamless && (
         <div style={{ position: 'absolute', inset: 0 }}>
-          {renderSeamlessSofa(seamless, '100%', '100%', (id) => `${ASSET_BASE}/${id}.png`, getCachedArtBbox)}
+          {renderSeamlessSofa(seamless, '100%', '100%', artSrc, getCachedArtBbox)}
         </div>
       )}
       {group && (
         <div style={{ position: 'absolute', inset: 0 }}>
-          {renderSeamlessGroup(cells, depth, bb, (id) => `${ASSET_BASE}/${id}.png`, getCachedArtBbox)}
+          {renderSeamlessGroup(cells, depth, bb, artSrc, getCachedArtBbox)}
         </div>
       )}
       {!corner && !seamless && !group && cells.map((c, i) => {
@@ -158,7 +171,7 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
         const artL = boxL + boxW / 2 - artW / 2;
         const artT = boxT + boxH / 2 - artH / 2;
 
-        const src = `${ASSET_BASE}/${c.moduleId}.png`;
+        const src = artSrc(c.moduleId);
         // Preset modules are seeded in sofa-art.ts so this is correct on first
         // paint; for any unseeded module, fall back to the default bbox (which
         // tiles roughly) rather than objectFit:contain (which renders the

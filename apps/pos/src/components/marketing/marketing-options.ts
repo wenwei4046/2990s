@@ -20,13 +20,13 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { maintActiveValues } from '@2990s/shared';
-import { classifySofaCompartment, representativeArtCode } from '@2990s/shared/sofa-build';
+import { normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
 import {
-  fetchMfgCatalog, resolvePhotoUrl, useFabricColours, useFabricLibrary,
-  type MfgAllowedOptions, type MfgCatalogApiRow,
+  classifyCompartmentCode, fetchMfgCatalog, resolveCompartmentPhoto, resolvePhotoUrl, useFabricColours, useFabricLibrary,
+  type MfgAllowedOptions, type MfgCatalogApiRow, type SofaCustomizerData,
 } from '../../lib/queries';
 import { useMaintenanceConfig } from '../../lib/products/mfg-products-queries';
-import { moduleInfo, sizeName, type DisplayType } from './marketing-model';
+import { sizeName, type DisplayType } from './marketing-model';
 
 export interface ModelOption {
   id: string;
@@ -37,14 +37,6 @@ export interface ModelOption {
   /** Size codes this Model is sold in (K / Q / S / SS …). */
   sizeCodes: string[];
   allowed: MfgAllowedOptions | null;
-}
-
-export interface ModuleOption {
-  id: string;
-  label: string;
-  dim: string;
-  art: string;
-  group: string;
 }
 
 export interface FabricSeriesOption { id: string; label: string }
@@ -67,14 +59,6 @@ const bySizeOrder = (a: string, b: string) => {
   const ib = SIZE_ORDER.indexOf(b.toUpperCase());
   return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
 };
-
-/** Builder group heading for a compartment code (design: 1-SEATER / 2-SEATER /
- *  CHAISE; live data adds the groups it has modules for). */
-const GROUP_LABEL: Record<string, string> = {
-  '1-seater': '1-Seater', '2-seater': '2-Seater', '3-seater': '3-Seater',
-  'L-Shape': 'Chaise', Corner: 'Corner', Accessory: 'Accessory', Other: 'Other',
-};
-export const MODULE_GROUP_ORDER = ['1-Seater', '2-Seater', '3-Seater', 'Chaise', 'Corner', 'Accessory', 'Other'];
 
 const TYPE_OF_CATEGORY: Record<string, DisplayType | undefined> = {
   SOFA: 'sofa', MATTRESS: 'mattress', BEDFRAME: 'bedframe', ACCESSORY: 'accessory',
@@ -125,9 +109,21 @@ export interface MarketingOptions {
   divans: string[];
   mattressSizes: string[];
   bedframeSizes: string[];
-  modules: ModuleOption[];
   moduleLabel: (code: string) => string | null;
+  /** The master compartment pool in the shape the POS Custom build takes a
+   *  Model's ticked compartments (its `modelCustomizer`), resolved the same
+   *  way — Maintenance photo and description per code — so the Marketing
+   *  canvas draws the same art. Every active compartment: a new product has
+   *  no Model to narrow it. No prices: Marketing lays out, it does not sell. */
+  sofaPool: SofaCustomizerData;
+  /** The art a compartment draws with, for previews of a laid-out sofa: the
+   *  pool's Maintenance image, else the bundled module art. */
+  moduleArt: (code: string) => string;
 }
+
+const EMPTY_POOL: Omit<SofaCustomizerData, 'compartments'> = {
+  sellingRows: [], sizes: [], legHeights: [], specials: [], fabricIds: [], modelId: '', modelName: '', modelCode: '',
+};
 
 export function useMarketingOptions(): MarketingOptions {
   const catalog = useQuery({
@@ -146,16 +142,25 @@ export function useMarketingOptions(): MarketingOptions {
       ((cfg[key] ?? []) as Array<{ value: string; active?: boolean }>)
         .filter((o) => o.active !== false)
         .map((o) => o.value);
-    const meta = (cfg.sofaCompartmentMeta ?? {}) as Record<string, { description?: string }>;
+    const meta = (cfg.sofaCompartmentMeta ?? {}) as Record<string, { description?: string; imageKey?: string }>;
+    const pool = values('sofaCompartments');
 
-    const modules: ModuleOption[] = values('sofaCompartments').map((code) => {
-      const info = moduleInfo(code, meta[code]?.description);
+    // The selling configurator's per-Model resolution (lib/queries.ts,
+    // useSofaCustomizer), applied to the whole pool.
+    const compartments = pool.map((code) => {
+      const m = meta[code] ?? {};
       return {
-        id: code, label: info.label, dim: info.dim,
-        art: `/sofa-modules/${representativeArtCode(code)}.svg`,
-        group: GROUP_LABEL[classifySofaCompartment(code)] ?? 'Other',
+        code,
+        normalizedCode: normalizeCompartmentCode(code),
+        label: m.description ?? code,
+        priceSen: 0,
+        imageUrl: resolveCompartmentPhoto(code, m.imageKey ?? `sofa-modules/${representativeArtCode(code)}.svg`),
+        group: classifyCompartmentCode(code),
       };
     });
+    const artByCode = new Map(compartments.map((c) => [c.normalizedCode, c.imageUrl] as const));
+    const moduleArt = (code: string) =>
+      artByCode.get(normalizeCompartmentCode(code)) ?? `/sofa-modules/${representativeArtCode(code)}.png`;
 
     return {
       isLoading: catalog.isLoading || fabrics.isLoading || colours.isLoading || maint.isLoading,
@@ -168,8 +173,9 @@ export function useMarketingOptions(): MarketingOptions {
       divans: priced('divanHeights').map(inchOption),
       mattressSizes: values('mattressSizes').sort(bySizeOrder).map(sizeName),
       bedframeSizes: values('bedframeSizes').sort(bySizeOrder).map(sizeName),
-      modules,
       moduleLabel: (code: string) => meta[code]?.description ?? null,
+      sofaPool: { ...EMPTY_POOL, compartments },
+      moduleArt,
     };
   }, [catalog.data, catalog.isLoading, fabrics.data, fabrics.isLoading, colours.data, colours.isLoading, maint.data, maint.isLoading]);
 }

@@ -6,7 +6,21 @@
 // design says. Nothing here touches the network or the DOM.
 // ----------------------------------------------------------------------------
 
-import { findModule, isAccessoryModule, normalizeCompartmentCode } from '@2990s/shared/sofa-build';
+import { findModule, isAccessoryModule, normalizeCompartmentCode, type Cell } from '@2990s/shared/sofa-build';
+
+/** A sofa as laid out on the Custom build canvas (owner 2026-10-09): each
+ *  compartment with its position and rotation, in cm — what `modules` alone
+ *  cannot say (a chaise turned 90°, a corner, two rows). null on a record
+ *  saved before the canvas, which has only its left-to-right `modules`. */
+export type SofaLayout = Cell[];
+
+/** The seat a form shows ('28"', 'Flat') as the depth the canvas measures
+ *  modules with ('28'). A seat that is not a size lays out at the 24" baseline,
+ *  as the configurator does for one it cannot read. */
+export const seatDepth = (seat: string): string => {
+  const n = parseInt(seat, 10);
+  return Number.isFinite(n) ? String(n) : '24';
+};
 
 export type DisplayType = 'sofa' | 'mattress' | 'bedframe' | 'accessory';
 export type RequestType = Exclude<DisplayType, 'accessory'>;
@@ -50,6 +64,8 @@ export interface DisplayItem {
   sofaFunction: string;
   /** The launch request it arrived from — its photo is read through it. */
   sourceRequestId: string | null;
+  /** How the sofa is laid out (0220); null when recorded before the canvas. */
+  layout: SofaLayout | null;
 }
 
 /** One combo on a launch request's reference price list. `price` is the raw
@@ -57,6 +73,8 @@ export interface DisplayItem {
 export interface ComboRow {
   modules: string[];
   price: string;
+  /** The combo as laid out on the canvas; absent on one saved before it. */
+  layout?: SofaLayout | null;
 }
 
 /** An image downscaled in the browser and ready to send (lib/marketing-api.ts). */
@@ -87,6 +105,9 @@ export interface LaunchRequest {
   divan: string;
   gap: string;
   modules: string[];
+  /** The sofa as laid out on the canvas (0220); null before it is built, or
+   *  on a request saved before the canvas. `modules` is its left-to-right read. */
+  layout: SofaLayout | null;
   /* Sofa only (owner 2026-10-09, migration 0219). */
   /** Length × width in cm, the raw input text — '' until typed. */
   lengthCm: string;
@@ -113,7 +134,7 @@ export interface LaunchRequest {
 
 export const blankRequest = (by: string, byRole: string): LaunchRequest => ({
   id: null, type: 'sofa', status: 'pending', supplierCode: '', model: '', fabric: '', colour: '', leg: '', seat: '',
-  size: '', height: '', divan: '', gap: '', modules: [], lengthCm: '', widthCm: '', sofaCategory: '', sofaFunction: '',
+  size: '', height: '', divan: '', gap: '', modules: [], layout: null, lengthCm: '', widthCm: '', sofaCategory: '', sofaFunction: '',
   photoAt: null, photoUpload: null, photoMatch: '', photoNote: '', rows: [], showroomId: '', action: '', replaceId: null,
   by, byRole, created: '',
 });
