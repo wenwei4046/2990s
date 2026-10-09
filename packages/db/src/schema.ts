@@ -13,8 +13,8 @@
 // ----------------------------------------------------------------------------
 
 import {
-  pgTable, pgEnum, uuid, text, integer, numeric, boolean, timestamp, date, jsonb,
-  primaryKey, index, check, uniqueIndex,
+  pgTable, pgEnum, uuid, text, integer, numeric, boolean, timestamp, date, jsonb, serial,
+  primaryKey, index, check, uniqueIndex, type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -3215,7 +3215,7 @@ export const hrItemKpi = pgTable('hr_item_kpi', {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// POS Marketing (migrations 0217 + 0218, owner 2026-10-08) — what is on display
+// POS Marketing (migrations 0217–0219, owner 2026-10-08) — what is on display
 // in each showroom, each showroom's floor plan, and the Management → Marketing
 // hand-off for new products. POS-owned, reached only through
 // apps/api/src/routes/marketing.ts on the service-role client (RLS on, no
@@ -3264,6 +3264,12 @@ export const marketingDisplays = pgTable('marketing_displays', {
   divan:           text('divan').notNull().default(''),
   gap:             text('gap').notNull().default(''),
   qty:             integer('qty').notNull().default(1),
+  // Carried from the launch request by Arrive (0219); empty on a piece
+  // recorded by hand. Its photo stays on the request (source_request_id).
+  lengthCm:        integer('length_cm'),
+  widthCm:         integer('width_cm'),
+  sofaCategory:    text('sofa_category').notNull().default(''),
+  sofaFunction:    text('sofa_function').notNull().default(''),
   sourceRequestId: uuid('source_request_id'),           // FK → marketing_launch_requests (0217)
   createdBy:       text('created_by'),
   createdByName:   text('created_by_name'),
@@ -3274,6 +3280,7 @@ export const marketingDisplays = pgTable('marketing_displays', {
 }, (t) => ({
   typeChk: check('marketing_displays_type_chk', sql`${t.type} IN ('sofa', 'mattress', 'bedframe', 'accessory')`),
   qtyChk:  check('marketing_displays_qty_chk', sql`${t.qty} >= 1`),
+  sizeChk: check('marketing_displays_size_chk', sql`(${t.lengthCm} IS NULL OR ${t.lengthCm} BETWEEN 1 AND 1000) AND (${t.widthCm} IS NULL OR ${t.widthCm} BETWEEN 1 AND 1000)`),
   idxLive: index('idx_marketing_displays_live').on(t.venueId, t.createdAt).where(sql`${t.removedAt} IS NULL`),
 }));
 
@@ -3306,6 +3313,20 @@ export const marketingLaunchRequests = pgTable('marketing_launch_requests', {
   divan:            text('divan').notNull().default(''),
   gap:              text('gap').notNull().default(''),
   modules:          text('modules').array().notNull().default(sql`'{}'::text[]`),
+  // Sofa only (0219). Saving a sofa needs all of them (the API checks); the
+  // columns stay nullable / '' so requests saved before 0219 still load.
+  lengthCm:         integer('length_cm'),
+  widthCm:          integer('width_cm'),
+  sofaCategory:     text('sofa_category').notNull().default(''),   // a marketing_sofa_options name, as saved
+  sofaFunction:     text('sofa_function').notNull().default(''),
+  // The reference photo, inline like a floor plan; never selected by /state.
+  photoContentType: text('photo_content_type'),
+  photoB64:         text('photo_b64'),
+  photoBytes:       integer('photo_bytes'),
+  photoFileName:    text('photo_file_name').notNull().default(''),
+  photoUpdatedAt:   timestamp('photo_updated_at', { withTimezone: true }),
+  photoMatch:       text('photo_match').notNull().default(''),     // '' | exact | non_exact
+  photoNote:        text('photo_note').notNull().default(''),      // what differs — Non-exact only
   // [{ modules: string[], price: number | null }] — whole RM, REFERENCE only;
   // never carried to a display row or the SKU Master.
   comboRows:        jsonb('combo_rows').notNull().default(sql`'[]'::jsonb`),
@@ -3332,5 +3353,36 @@ export const marketingLaunchRequests = pgTable('marketing_launch_requests', {
   statusChk: check('marketing_launch_requests_status_chk', sql`${t.status} IN ('pending', 'completed', 'arrived', 'deleted')`),
   actionChk: check('marketing_launch_requests_action_chk', sql`${t.action} IN ('add', 'replace')`),
   rowsChk:   check('marketing_launch_requests_rows_chk', sql`jsonb_typeof(${t.comboRows}) = 'array'`),
+  sizeChk:   check('marketing_launch_requests_size_chk', sql`(${t.lengthCm} IS NULL OR ${t.lengthCm} BETWEEN 1 AND 1000) AND (${t.widthCm} IS NULL OR ${t.widthCm} BETWEEN 1 AND 1000)`),
+  photoChk:  check('marketing_launch_requests_photo_chk', sql`(${t.photoB64} IS NULL AND ${t.photoContentType} IS NULL AND ${t.photoBytes} IS NULL AND ${t.photoUpdatedAt} IS NULL) OR (${t.photoB64} IS NOT NULL AND ${t.photoUpdatedAt} IS NOT NULL AND ${t.photoContentType} IN ('image/png', 'image/jpeg', 'image/webp') AND ${t.photoBytes} > 0 AND ${t.photoBytes} <= 3145728)`),
+  matchChk:  check('marketing_launch_requests_match_chk', sql`${t.photoMatch} IN ('', 'exact', 'non_exact')`),
   idxOpen:   index('idx_marketing_launch_requests_open').on(t.status, t.createdAt).where(sql`${t.status} IN ('pending', 'completed')`),
+}));
+
+/** The Category → Function lists the launch form offers for a sofa (0219).
+ *  No SKU Master source, so Marketing keeps them (Marketing → ⋯ → Maintenance).
+ *  A 'category' row has no parent; a 'function' row belongs to one category.
+ *  Requests store the NAME they were saved with, never a link to these rows. */
+export const marketingSofaOptions = pgTable('marketing_sofa_options', {
+  id:             uuid('id').primaryKey().defaultRandom(),
+  kind:           text('kind').notNull(),                 // category | function
+  parentId:       uuid('parent_id').references((): AnyPgColumn => marketingSofaOptions.id),
+  name:           text('name').notNull(),
+  seq:            serial('seq').notNull(),                // the order they were added
+  createdBy:      text('created_by'),
+  createdByName:  text('created_by_name'),
+  createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:      text('updated_by'),
+  updatedByName:  text('updated_by_name'),
+  updatedAt:      timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  archivedAt:     timestamp('archived_at', { withTimezone: true }),   // Remove — never a DELETE
+  archivedBy:     text('archived_by'),
+  archivedByName: text('archived_by_name'),
+}, (t) => ({
+  kindChk:   check('marketing_sofa_options_kind_chk', sql`${t.kind} IN ('category', 'function')`),
+  parentChk: check('marketing_sofa_options_parent_chk', sql`(${t.kind} = 'category') = (${t.parentId} IS NULL)`),
+  nameChk:   check('marketing_sofa_options_name_chk', sql`btrim(${t.name}) <> '' AND length(${t.name}) <= 60`),
+  liveName:  uniqueIndex('uq_marketing_sofa_options_live_name')
+    .on(sql`coalesce(${t.parentId}, '00000000-0000-0000-0000-000000000000'::uuid)`, sql`lower(btrim(${t.name}))`)
+    .where(sql`${t.archivedAt} IS NULL`),
 }));

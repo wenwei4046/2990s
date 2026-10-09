@@ -971,3 +971,100 @@
 .rpApplyOff { background: var(--line-strong); }
 .testToggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; min-height: 44px; cursor: pointer; }
 .testToggle input { width: 18px; height: 18px; accent-color: var(--c-orange); }
+
+/* ════════════════════════ 0219 — sofa size, photo, category / function ════════════════════════
+   Owner 2026-10-09; not in the design handoff, so built from the section's
+   own pieces: the destination box's Required, the floor plan's upload strip,
+   the Add / Replace chips, the showroom rail's cards and count pill. */
+
+/* Needed even to save — the destination box's "Required", per field. */
+.reqTag { margin-left: 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: var(--c-error); vertical-align: 1px; }
+.reqBadge {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 0 6px;
+  border-radius: 999px; border: 1px solid var(--c-error); color: var(--c-error);
+}
+.fieldSize { max-width: 360px; }
+
+.photoCard {
+  display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: start;
+  padding: 14px; border-radius: 10px; background: var(--c-cream); border: 1.5px solid var(--line);
+}
+/* contain, not cover: a reference photo is shown whole — a cropped arm is
+   exactly the detail Exact / Non-exact is about. */
+.photoThumb {
+  width: 100%; aspect-ratio: 4 / 3; padding: 0; border-radius: 10px; border: 1px solid var(--line);
+  background-color: #fff; background-size: contain; background-repeat: no-repeat; background-position: center;
+  display: flex; align-items: center; justify-content: center; cursor: zoom-in;
+}
+.photoThumb:disabled { cursor: default; }
+.photoThumbText { font-size: 12px; color: var(--fg-muted); }
+.photoSide { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.noteInput { resize: vertical; min-height: 64px; line-height: 1.5; }
+.photoReplace {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
+  border: 1.5px solid var(--line); border-radius: 999px; background: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.photoReplace:hover { border-color: var(--c-burnt); color: var(--c-burnt); }
+
+/* The photo, full size, over the form. */
+.lightbox {
+  position: fixed; inset: 0; z-index: 88; background: rgba(34, 31, 32, 0.86);
+  display: flex; align-items: center; justify-content: center; padding: 24px; cursor: zoom-out;
+}
+.lightboxImg { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 10px; background: #fff; }
+.lightboxClose {
+  position: fixed; top: 16px; right: 16px; width: 44px; height: 44px; border-radius: 999px; border: 0;
+  background: #fff; color: var(--c-ink); display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+
+/* Export: the photo goes beside the brief. */
+.saveLink { margin-right: auto; display: inline-flex; align-items: center; gap: 8px; text-decoration: none; color: var(--c-ink); }
+
+/* Display drawer: the photo its launch request was filed with. */
+.refPhotoImg { display: block; width: 100%; border-radius: 12px; border: 1px solid var(--line); }
+.refPhotoNote {
+  font-size: 13px; color: var(--c-ink); background: var(--c-cream); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 14px;
+}
+
+/* ⋯ at the end of the tab bar, and its menu. */
+.moreWrap { margin-left: auto; position: relative; align-self: center; }
+.moreBtn {
+  width: 40px; height: 40px; border-radius: 999px; border: 1.5px solid transparent; background: transparent;
+  color: var(--fg-muted); display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.moreBtn:hover, .moreBtnOpen { border-color: var(--line); background: #fff; color: var(--c-ink); }
+.morePop {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 41; width: 280px; padding: 6px;
+  background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 32px rgba(34, 31, 32, 0.14);
+}
+.moreItem {
+  width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; border-radius: 10px;
+  background: transparent; text-align: left; cursor: pointer;
+}
+.moreItem:hover { background: var(--c-cream); }
+.moreItemIcon { color: var(--c-burnt); }
+.moreItemText { display: flex; flex-direction: column; line-height: 1.3; }
+.moreItemTitle { font-size: 14px; font-weight: 600; }
+.moreItemSub { font-size: 12px; color: var(--fg-muted); }
+
+/* Maintenance tab. */
+.maintWrap { display: flex; flex-direction: column; gap: 20px; }
+.maintGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+.maintCard {
+  background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 16px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.maintCardHead { display: flex; align-items: center; gap: 10px; }
+.maintName { font-size: 16px; font-weight: 700; }
+.fnChip {
+  padding: 8px 14px; border-radius: 999px; border: 1.5px solid var(--line); background: var(--c-cream);
+  color: var(--c-ink); font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.fnChip:hover { border-color: var(--c-burnt); color: var(--c-burnt); }
+.fnAdd {
+  padding: 8px 14px; border-radius: 999px; border: 1.5px dashed var(--line-strong); background: transparent;
+  color: var(--fg-muted); font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.fnAdd:hover { border-color: var(--c-orange); color: var(--c-burnt); }
+.maintHint { font-size: 12px; color: var(--c-warn); }

@@ -11,7 +11,7 @@ import {
 } from './marketing-model';
 import { useMarketingOptions, type MarketingOptions } from './marketing-options';
 import {
-  prepareFloorplan, useDeleteFloorplan, useFloorplan, usePutFloorplan, useRemoveDisplay, type MarketingState,
+  prepareFloorplan, useDeleteFloorplan, useFloorplan, usePutFloorplan, useRemoveDisplay, useRequestPhoto, type MarketingState,
 } from '../../lib/marketing-api';
 import { SofaBlueprint } from './SofaBlueprint';
 import { AddDisplayModal } from './AddDisplayModal';
@@ -29,6 +29,21 @@ const photoOf = (it: DisplayItem, opts: MarketingOptions): string | null => {
 };
 const initialOf = (name: string) => (name || '?').charAt(0).toUpperCase();
 const bg = (url: string | null) => (url ? { backgroundImage: `url("${url}")` } : undefined);
+
+/** The photo a piece's launch request was filed with (0219), if any, and
+ *  whether the piece is exactly the sofa in it. An arrived request cannot
+ *  change any more, so one fetch per request is enough. */
+const RequestPhoto = ({ requestId }: { requestId: string }) => {
+  const p = useRequestPhoto(requestId, 'arrived').data;
+  if (!p) return null;
+  return (
+    <div className={s.compsBlock}>
+      <div className={s.compsTitle}>Photo · {p.match === 'exact' ? 'Exact' : p.match === 'non_exact' ? 'Non-exact' : 'from the launch request'}</div>
+      <img src={p.dataUrl} alt="" className={s.refPhotoImg} />
+      {p.match === 'non_exact' && p.note && <div className={s.refPhotoNote}>{p.note}</div>}
+    </div>
+  );
+};
 
 export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; toast: (t: string) => void }) => {
   const opts = useMarketingOptions();
@@ -330,6 +345,7 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
                   <div key={row.k} className={s.kvRow}><span className={s.kvKey}>{row.k}</span><span className={s.kvVal}>{row.v}</span></div>
                 ))}
               </div>
+              {drawer.it.type === 'sofa' && drawer.it.sourceRequestId && <RequestPhoto requestId={drawer.it.sourceRequestId} />}
               {drawer.it.type === 'sofa' && (
                 <div className={s.compsBlock}>
                   <div className={s.compsTitle}>Compartments · left to right</div>

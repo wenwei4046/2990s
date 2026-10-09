@@ -26,6 +26,7 @@ const state = vi.hoisted(() => ({
   inserted: null as Record<string, unknown> | null,
   updated: null as Record<string, unknown> | null,
   lastRpc: null as { fn: string; args: Record<string, unknown> } | null,
+  orFilter: null as string | null,
 }));
 
 vi.mock('@supabase/supabase-js', () => ({
@@ -35,6 +36,7 @@ vi.mock('@supabase/supabase-js', () => ({
       const pick = <K extends keyof Answer>(k: K, shared: unknown) => (k in own() ? own()[k] : shared);
       const obj: any = {};
       for (const m of ['select', 'order', 'eq', 'is', 'in', 'delete']) obj[m] = () => obj;
+      obj.or = (f: string) => { state.orFilter = f; return obj; };
       obj.insert = (p: Record<string, unknown>) => { state.inserted = p; return obj; };
       obj.update = (p: Record<string, unknown>) => { state.updated = p; return obj; };
       obj.upsert = (p: Record<string, unknown>) => { state.inserted = p; return obj; };
@@ -85,7 +87,18 @@ beforeEach(() => {
   // Every write files under a showroom; by default it is a listed one.
   state.tables = { marketing_showrooms: { maybe: { id: '107' } } };
   state.rpcResult = null; state.rpcError = null; state.inserted = null; state.updated = null; state.lastRpc = null;
+  state.orFilter = null;
 });
+
+/** A 1×1 PNG, base64 — small enough for any size check. */
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+/** A sofa request with everything saving needs since 0219. */
+const SOFA = {
+  type: 'sofa', status: 'pending', venueId: '107', action: 'add', supplierCode: 'SL-2207',
+  lengthCm: 220, widthCm: 95, sofaCategory: 'Seater', sofaFunction: 'Push back',
+  photoMatch: 'exact', photo: { contentType: 'image/png', dataB64: PNG, fileName: 'sofa.png' },
+};
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('canUseMarketing', () => {
@@ -139,7 +152,7 @@ describe('gate', () => {
     state.list = [];
     const res = await app().request('/marketing/state', { headers: auth }, env);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ showrooms: [], displays: [], requests: [], floorplans: [] });
+    expect(await res.json()).toEqual({ showrooms: [], displays: [], requests: [], floorplans: [], sofaOptions: [] });
   });
 });
 
@@ -212,7 +225,7 @@ describe('showrooms', () => {
     const display = await app().request('/marketing/displays', json('POST', { venueId: 'gone', type: 'mattress', name: 'AKKA-FIRM' }), env);
     expect(display.status).toBe(409);
     expect(await display.json()).toEqual({ error: 'unknown_showroom', reason: 'This showroom is no longer on the list.' });
-    const request = await app().request('/marketing/requests', json('POST', { type: 'sofa', status: 'pending', venueId: 'gone', action: 'add' }), env);
+    const request = await app().request('/marketing/requests', json('POST', { ...SOFA, venueId: 'gone' }), env);
     expect(request.status).toBe(409);
     const plan = await app().request('/marketing/floorplans/gone', json('PUT', { contentType: 'image/png', dataB64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB' }), env);
     expect(plan.status).toBe(409);
@@ -247,7 +260,8 @@ describe('displays', () => {
 });
 
 describe('launch requests', () => {
-  const base = { type: 'sofa', status: 'pending', venueId: '107', action: 'add' };
+  const base = SOFA;
+  const RID = '6f1f6c1e-0000-4000-8000-000000000004';
 
   it('needs the showroom and Add / Replace to save at all', async () => {
     meAnswers(MARKETING);
@@ -255,12 +269,103 @@ describe('launch requests', () => {
     expect(res.status).toBe(400);
   });
 
-  it('saves a bare pending request and snapshots who asked', async () => {
+  it('saves a pending sofa and snapshots who asked', async () => {
     meAnswers(MARKETING);
     state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
     const res = await app().request('/marketing/requests', json('POST', base), env);
     expect(res.status).toBe(201);
     expect(state.inserted).toMatchObject({ requested_by: '41', requested_by_name: 'Marketing', requested_by_role: 'Marketing', completed_at: null });
+  });
+
+  /* Owner 2026-10-09: these are needed to SAVE, not only to Complete. */
+  it('will not save a sofa without its supplier code, size, category, function and photo', async () => {
+    meAnswers(MARKETING);
+    const res = await app().request('/marketing/requests', json('POST', { type: 'sofa', status: 'pending', venueId: '107', action: 'add' }), env);
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string; missing: string[]; reason: string };
+    expect(body.error).toBe('missing_fields');
+    expect(body.missing).toEqual(['Supplier code', 'Sofa size', 'Category', 'Function', 'Photo']);
+    expect(body.reason).toBe('Fill in Supplier code, Sofa size, Category, Function and Photo before saving. If the form does not show them, reload the POS.');
+    expect(state.inserted).toBeNull();
+  });
+
+  it('wants the photo marked Exact or Non-exact, and a Non-exact one explained', async () => {
+    meAnswers(MARKETING);
+    const unmarked = await app().request('/marketing/requests', json('POST', { ...base, photoMatch: '' }), env);
+    expect((await unmarked.json() as { missing: string[] }).missing).toEqual(['Exact / Non-exact']);
+    const unexplained = await app().request('/marketing/requests', json('POST', { ...base, photoMatch: 'non_exact', photoNote: '  ' }), env);
+    expect((await unexplained.json() as { missing: string[] }).missing).toEqual(['Photo note']);
+    expect(state.inserted).toBeNull();
+  });
+
+  it('needs only the supplier code on a mattress or bed frame', async () => {
+    meAnswers(MARKETING);
+    const bare = await app().request('/marketing/requests', json('POST', { type: 'mattress', status: 'pending', venueId: '107', action: 'add' }), env);
+    expect((await bare.json() as { missing: string[] }).missing).toEqual(['Supplier code']);
+    state.single = { id: 'r2', type: 'bedframe', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    const ok = await app().request('/marketing/requests', json('POST', { type: 'bedframe', status: 'pending', venueId: '107', action: 'add', supplierCode: 'BF-9' }), env);
+    expect(ok.status).toBe(201);
+  });
+
+  it('writes the size, category, function and photo with the request in one insert', async () => {
+    meAnswers(MARKETING);
+    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    const res = await app().request('/marketing/requests', json('POST', { ...base, photoNote: 'kept only for Non-exact' }), env);
+    expect(res.status).toBe(201);
+    expect(state.inserted).toMatchObject({
+      length_cm: 220, width_cm: 95, sofa_category: 'Seater', sofa_function: 'Push back',
+      photo_match: 'exact', photo_note: '', photo_content_type: 'image/png', photo_b64: PNG, photo_file_name: 'sofa.png',
+    });
+    expect(state.inserted?.photo_bytes).toBeGreaterThan(0);
+    expect(typeof state.inserted?.photo_updated_at).toBe('string');
+  });
+
+  it('refuses a size in anything but whole centimetres', async () => {
+    meAnswers(MARKETING);
+    const res = await app().request('/marketing/requests', json('POST', { ...base, lengthCm: 220.5 }), env);
+    expect(res.status).toBe(400);
+    expect(state.inserted).toBeNull();
+  });
+
+  it('never puts the photo itself on the wire of a request', async () => {
+    meAnswers(MARKETING);
+    state.single = {
+      id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [],
+      photo_b64: PNG, photo_updated_at: '2026-10-09T03:00:00.000Z', photo_match: 'exact', length_cm: 220, width_cm: 95,
+    };
+    const res = await app().request('/marketing/requests', json('POST', base), env);
+    const body = await res.json() as { request: Record<string, unknown> };
+    expect(JSON.stringify(body)).not.toContain(PNG);
+    expect(body.request).toMatchObject({ photoAt: '2026-10-09T03:00:00.000Z', photoMatch: 'exact', lengthCm: 220, widthCm: 95 });
+  });
+
+  it('keeps the saved photo on an edit that sends none', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_launch_requests = {
+      maybe: { id: RID, type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [], photo_updated_at: '2026-10-09T03:00:00.000Z' },
+    };
+    const noPhoto = { ...base, photo: undefined }; // JSON drops it: no photo sent
+    const res = await app().request(`/marketing/requests/${RID}`, json('PUT', noPhoto), env);
+    expect(res.status).toBe(200);
+    expect(state.updated).not.toHaveProperty('photo_b64');
+    expect(state.updated).toMatchObject({ length_cm: 220, sofa_function: 'Push back' });
+  });
+
+  it('will not save an edit of a sofa that has no photo and sends none', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_launch_requests = { maybe: { id: RID, photo_updated_at: null } };
+    const noPhoto = { ...base, photo: undefined }; // JSON drops it: no photo sent
+    const res = await app().request(`/marketing/requests/${RID}`, json('PUT', noPhoto), env);
+    expect(res.status).toBe(400);
+    expect((await res.json() as { missing: string[] }).missing).toEqual(['Photo']);
+    expect(state.updated).toBeNull();
+  });
+
+  it('404s an edit of a request that has left the board', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_launch_requests = { maybe: null };
+    const res = await app().request(`/marketing/requests/${RID}`, json('PUT', base), env);
+    expect(res.status).toBe(404);
   });
 
   it('will not complete a Replace without the piece it replaces', async () => {
@@ -284,6 +389,108 @@ describe('launch requests', () => {
     const res = await app().request('/marketing/requests', json('POST', { ...base, rows: [{ modules: ['2A(LHF)'], price: null }] }), env);
     const body = await res.json() as { request: { rows: unknown[] } };
     expect(body.request.rows).toEqual([{ modules: ['2A(LHF)'], price: null }]);
+  });
+
+  it('serves a request photo with its Exact / Non-exact note, or null', async () => {
+    meAnswers(MARKETING);
+    state.maybe = { id: RID, photo_content_type: 'image/png', photo_b64: PNG, photo_file_name: 'sofa.png', photo_updated_at: '2026-10-09T03:00:00.000Z', photo_match: 'non_exact', photo_note: 'Slimmer arms' };
+    const res = await app().request(`/marketing/requests/${RID}/photo`, { headers: auth }, env);
+    expect(await res.json()).toEqual({
+      photo: { dataUrl: `data:image/png;base64,${PNG}`, fileName: 'sofa.png', updatedAt: '2026-10-09T03:00:00.000Z', match: 'non_exact', note: 'Slimmer arms' },
+    });
+    state.maybe = { id: RID, photo_b64: null };
+    const none = await app().request(`/marketing/requests/${RID}/photo`, { headers: auth }, env);
+    expect(await none.json()).toEqual({ photo: null });
+  });
+});
+
+describe('sofa category + function lists', () => {
+  const CAT = '6f1f6c1e-0000-4000-8000-0000000000c1';
+
+  it('reads each category with its functions, in the order they were added', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_sofa_options = {
+      list: [
+        { id: 'f2', kind: 'function', parent_id: 'c1', name: 'Push back', seq: 4, created_by: '41' },
+        { id: 'c1', kind: 'category', parent_id: null, name: 'Seater', seq: 1 },
+        { id: 'f1', kind: 'function', parent_id: 'c1', name: 'Fixed', seq: 3 },
+        { id: 'c2', kind: 'category', parent_id: null, name: 'Chair', seq: 2 },
+      ],
+    };
+    const res = await app().request('/marketing/state', { headers: auth }, env);
+    const body = await res.json() as { sofaOptions: unknown };
+    expect(body.sofaOptions).toEqual([
+      { id: 'c1', name: 'Seater', functions: [{ id: 'f1', name: 'Fixed' }, { id: 'f2', name: 'Push back' }] },
+      { id: 'c2', name: 'Chair', functions: [] },
+    ]);
+  });
+
+  it('adds a category, and a function under a listed one', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_sofa_options = { single: { id: 'c9', kind: 'category', parent_id: null, name: 'Recliner', seq: 9 } };
+    const cat = await app().request('/marketing/sofa-options', json('POST', { name: ' Recliner ' }), env);
+    expect(cat.status).toBe(201);
+    expect(state.inserted).toMatchObject({ kind: 'category', parent_id: null, name: 'Recliner', created_by: '41' });
+
+    state.tables.marketing_sofa_options = {
+      maybe: { id: CAT, kind: 'category' },
+      single: { id: 'f9', kind: 'function', parent_id: CAT, name: 'Electric', seq: 10 },
+    };
+    const fn = await app().request('/marketing/sofa-options', json('POST', { name: 'Electric', categoryId: CAT }), env);
+    expect(fn.status).toBe(201);
+    expect(state.inserted).toMatchObject({ kind: 'function', parent_id: CAT, name: 'Electric' });
+    expect(await fn.json()).toEqual({ option: { id: 'f9', kind: 'function', categoryId: CAT, name: 'Electric' } });
+  });
+
+  it('files no function under a removed category, or under a function', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_sofa_options = { maybe: null };
+    const gone = await app().request('/marketing/sofa-options', json('POST', { name: 'Electric', categoryId: CAT }), env);
+    expect(gone.status).toBe(409);
+    state.tables.marketing_sofa_options = { maybe: { id: CAT, kind: 'function' } };
+    const nested = await app().request('/marketing/sofa-options', json('POST', { name: 'Electric', categoryId: CAT }), env);
+    expect(nested.status).toBe(409);
+    expect(state.inserted).toBeNull();
+  });
+
+  it('says so when a name is already on the list', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_sofa_options = { single: null, error: { message: 'duplicate key value', code: '23505' } };
+    const res = await app().request('/marketing/sofa-options', json('POST', { name: 'Seater' }), env);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'duplicate_name', reason: 'There is already a category called Seater.' });
+  });
+
+  it('renames one', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_sofa_options = { maybe: { id: CAT, kind: 'category', parent_id: null, name: 'Seaters', seq: 1 } };
+    const res = await app().request(`/marketing/sofa-options/${CAT}`, json('PATCH', { name: 'Seaters' }), env);
+    expect(res.status).toBe(200);
+    expect(state.updated).toMatchObject({ name: 'Seaters', updated_by: '41' });
+  });
+
+  it('removes a category together with its functions, by stamping', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_sofa_options = { maybe: { id: CAT, kind: 'category' } };
+    const res = await app().request(`/marketing/sofa-options/${CAT}`, { method: 'DELETE', headers: auth }, env);
+    expect(res.status).toBe(200);
+    expect(state.updated).toMatchObject({ archived_by: '41', archived_by_name: 'Marketing' });
+    expect(state.orFilter).toBe(`id.eq.${CAT},parent_id.eq.${CAT}`);
+  });
+
+  it('removes a function on its own', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_sofa_options = { maybe: { id: CAT, kind: 'function' } };
+    const res = await app().request(`/marketing/sofa-options/${CAT}`, { method: 'DELETE', headers: auth }, env);
+    expect(res.status).toBe(200);
+    expect(state.orFilter).toBeNull();
+  });
+
+  it('keeps a salesperson out of the lists', async () => {
+    meAnswers(SALES);
+    const res = await app().request('/marketing/sofa-options', json('POST', { name: 'Recliner' }), env);
+    expect(res.status).toBe(403);
+    expect(state.inserted).toBeNull();
   });
 });
 

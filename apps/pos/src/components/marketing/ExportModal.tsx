@@ -1,8 +1,9 @@
 // Export for Procurement (design screen 09): an editable plain-text brief to
-// paste into WhatsApp or email.
+// paste into WhatsApp or email — and, for a sofa, its photo to send with it
+// (0219), since the brief can only describe it.
 
 import { useState } from 'react';
-import { Copy, X } from 'lucide-react';
+import { Copy, Download, X } from 'lucide-react';
 import s from './marketing.module.css';
 
 /** Clipboard API where the context allows it; the textarea + execCommand path
@@ -16,7 +17,12 @@ const fallbackCopy = (t: string) => {
   ta.remove();
 };
 
-export const ExportModal = ({ initial, onClose }: { initial: string; onClose: () => void }) => {
+export const ExportModal = ({ initial, photo, onClose }: {
+  initial: string;
+  /** The request's photo, offered as a file to save; null when it has none. */
+  photo?: { dataUrl: string; fileName: string } | null;
+  onClose: () => void;
+}) => {
   const [text, setText] = useState(initial);
   const [copied, setCopied] = useState(false);
 
@@ -49,6 +55,11 @@ export const ExportModal = ({ initial, onClose }: { initial: string; onClose: ()
           />
         </div>
         <div className={s.exportFoot}>
+          {photo && (
+            <a className={`${s.ghostBtn} ${s.saveLink}`} href={photo.dataUrl} download={photo.fileName}>
+              <Download size={16} strokeWidth={1.75} className={s.icon} />Save photo
+            </a>
+          )}
           <button type="button" className={s.ghostBtn} onClick={onClose}>Close</button>
           <button type="button" className={`${s.copyBtn} ${copied ? s.copyBtnDone : ''}`} onClick={copy}>
             <Copy size={15} strokeWidth={1.75} className={s.icon} />{copied ? 'Copied' : 'Copy text'}

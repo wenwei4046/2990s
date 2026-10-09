@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
-  blankRequest, detailRows, exportText, inch, missingOf, RM, shapeName, specOf, tagsOf,
-  type DisplayItem, type LaunchRequest,
+  blankRequest, cmOf, detailRows, exportText, inch, missingOf, RM, saveBlockersOf, saveMissingOf, shapeName, sizeText,
+  specOf, tagsOf, type DisplayItem, type LaunchRequest,
 } from './marketing-model';
 
 const item = (over: Partial<DisplayItem>): DisplayItem => ({
   id: 'd1', venueId: '107', type: 'sofa', modelId: null, name: 'AM9036', code: 'SOFA AM9036', photoUrl: null, isNew: false,
-  fabric: '', colour: '', leg: '', seat: '', modules: [], size: '', height: '', divan: '', gap: '', qty: 1, ...over,
+  fabric: '', colour: '', leg: '', seat: '', modules: [], size: '', height: '', divan: '', gap: '', qty: 1,
+  lengthCm: null, widthCm: null, sofaCategory: '', sofaFunction: '', sourceRequestId: null, ...over,
 });
+
+/** Everything a sofa needs to be saved (owner 2026-10-09), and nothing more. */
+const SAVEABLE_SOFA: Partial<LaunchRequest> = {
+  supplierCode: 'SL-2207', lengthCm: '220', widthCm: '95', sofaCategory: 'Seater', sofaFunction: 'Push back',
+  photoAt: '2026-10-09T03:00:00.000Z', photoMatch: 'exact', showroomId: '107', action: 'add',
+};
 
 describe('shapeName (design prototype rules)', () => {
   it.each([
@@ -87,15 +94,32 @@ describe('missingOf', () => {
 
   it('lists every sofa field in the design order', () => {
     expect(missingOf(req({}))).toEqual([
-      'Supplier code', 'Model name', 'Components', 'Fabric series', 'Colour', 'Leg height', 'Seat', 'Price list', 'Showroom', 'Add / Replace',
+      'Supplier code', 'Model name', 'Components', 'Sofa size', 'Category', 'Function', 'Photo',
+      'Fabric series', 'Colour', 'Leg height', 'Seat', 'Price list', 'Showroom', 'Add / Replace',
     ]);
   });
 
   it('wants every combo priced', () => {
-    const r = req({ supplierCode: 'S', model: 'M', modules: ['1A(LHF)'], fabric: 'F', colour: 'C', leg: '4"', seat: '28"', showroomId: '107', action: 'add',
+    const r = req({ ...SAVEABLE_SOFA, model: 'M', modules: ['1A(LHF)'], fabric: 'F', colour: 'C', leg: '4"', seat: '28"',
       rows: [{ modules: ['1A(LHF)'], price: '3540' }, { modules: ['2NA'], price: '' }] });
     expect(missingOf(r)).toEqual(['Price list']);
     expect(missingOf({ ...r, rows: [r.rows[0]!] })).toEqual([]);
+  });
+
+  it('asks Exact or Non-exact once there is a photo, and a note for Non-exact', () => {
+    const r = req({ ...SAVEABLE_SOFA, photoMatch: '' });
+    expect(saveMissingOf(r)).toEqual(['Exact / Non-exact']);
+    expect(saveMissingOf({ ...r, photoMatch: 'non_exact', photoNote: '  ' })).toEqual(['Photo note']);
+    expect(saveMissingOf({ ...r, photoMatch: 'non_exact', photoNote: 'Slimmer arms' })).toEqual([]);
+    // A photo picked in the form counts before it is saved.
+    const picked = { contentType: 'image/jpeg', dataB64: 'AAAA', fileName: 'a.jpg' };
+    expect(saveMissingOf({ ...r, photoAt: null, photoUpload: picked, photoMatch: 'exact' })).toEqual([]);
+  });
+
+  it('wants a size in whole cm on both sides', () => {
+    expect(missingOf(req({ ...SAVEABLE_SOFA, widthCm: '' }))).toContain('Sofa size');
+    expect(missingOf(req({ ...SAVEABLE_SOFA, lengthCm: '0' }))).toContain('Sofa size');
+    expect(missingOf(req({ ...SAVEABLE_SOFA }))).not.toContain('Sofa size');
   });
 
   it('wants the piece to replace once Replace is chosen', () => {
@@ -109,11 +133,61 @@ describe('missingOf', () => {
   });
 });
 
+/* Owner 2026-10-09: these are needed to SAVE (Pending Info), not only to Complete. */
+describe('what saving needs', () => {
+  const req = (over: Partial<LaunchRequest>): LaunchRequest => ({ ...blankRequest('Loo', 'Sales'), ...over });
+
+  it('a sofa: supplier code, size, category, function, photo, showroom and Add / Replace', () => {
+    expect(saveMissingOf(req({}))).toEqual([
+      'Supplier code', 'Sofa size', 'Category', 'Function', 'Photo', 'Showroom', 'Add / Replace',
+    ]);
+    expect(saveMissingOf(req(SAVEABLE_SOFA))).toEqual([]);
+  });
+
+  it('a mattress or bed frame: the supplier code too, nothing of the sofa’s', () => {
+    expect(saveMissingOf(req({ type: 'mattress', showroomId: '107', action: 'add' }))).toEqual(['Supplier code']);
+    expect(saveMissingOf(req({ type: 'bedframe', supplierCode: 'BF-9', showroomId: '107', action: 'add' }))).toEqual([]);
+  });
+
+  it('lets a pending Replace wait for a piece to replace, as the API does', () => {
+    const r = req({ ...SAVEABLE_SOFA, action: 'replace', replaceId: null });
+    expect(saveMissingOf(r)).toEqual(['Item to replace']);
+    expect(saveBlockersOf(r)).toEqual([]);
+  });
+});
+
+describe('size', () => {
+  it('reads whole cm and refuses what is not a size', () => {
+    expect(cmOf('220')).toBe(220);
+    expect(cmOf('94.6')).toBe(95);
+    expect(cmOf('')).toBeNull();
+    expect(cmOf('0')).toBeNull();
+    expect(cmOf('1200')).toBeNull();
+    expect(cmOf('abc')).toBeNull();
+  });
+  it('prints L × W only when both are there', () => {
+    expect(sizeText('220', '95')).toBe('220 × 95 cm');
+    expect(sizeText(220, null)).toBe('');
+  });
+});
+
+describe('a display that arrived with size, category and function', () => {
+  it('shows them in its details, and a hand-recorded one does not', () => {
+    const arrived = item({ lengthCm: 220, widthCm: 95, sofaCategory: 'Seater', sofaFunction: 'Push back' });
+    expect(detailRows(arrived).slice(-3)).toEqual([
+      { k: 'Size', v: '220 × 95 cm' }, { k: 'Category', v: 'Seater' }, { k: 'Function', v: 'Push back' },
+    ]);
+    expect(detailRows(item({})).map((r) => r.k)).toEqual(['Layout', 'Seat', 'Fabric series', 'Colour', 'Leg height']);
+  });
+});
+
 describe('exportText', () => {
   it('matches the design layout for a sofa Replace', () => {
     const r: LaunchRequest = {
       ...blankRequest('Management', 'Staff'), id: 'r1', status: 'completed', model: 'hjjh', supplierCode: 'SL-2207',
       fabric: 'Velvet VL', colour: 'Rust', leg: '4"', seat: '30"', modules: ['2A(LHF)', 'L(RHF)'],
+      lengthCm: '253', widthCm: '165', sofaCategory: 'Seater', sofaFunction: 'Push back',
+      photoAt: '2026-10-06T03:00:00.000Z', photoMatch: 'non_exact', photoNote: 'Slimmer arms',
       showroomId: '107', action: 'replace', replaceId: 'd1', created: '2026-10-06T03:00:00.000Z',
     };
     const text = exportText(r, {
@@ -130,6 +204,10 @@ describe('exportText', () => {
       'Leg height    : 4"',
       'Seat          : 30"',
       'Layout        : 2+L',
+      'Size (L × W)  : 253 × 165 cm',
+      'Category      : Seater',
+      'Function      : Push back',
+      'Photo         : Non-exact — Slimmer arms',
       '',
       'Compartments (left to right):',
       '  1. 2A(LHF) — Left hand facing (W 158 × D 95 cm)',
