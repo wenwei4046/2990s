@@ -443,11 +443,14 @@ sidebar, one page `/marketing?tab=display|launch|sales` (`pages/Marketing.tsx`,
 floor, plus its floor plan; **Product launching** — the Management → Marketing
 new-product board (Pending Info → Completed Info → Arrive); **Sales analysis** —
 moved here from Maintain and redesigned. The old Sales Analysis page, **including
-its Targets editor**, was removed with it (`/sales-analysis` redirects).
+its Targets editor**, was removed with it (`/sales-analysis` redirects). Behind
+**⋯** at the end of the tab bar, **Maintenance** (`?tab=maintenance`, 2026-10-09)
+keeps the option lists that have no SKU Master source.
 
 | Piece | Home | Why |
 |---|---|---|
-| Displays, floor plans, launch requests | **2990's Supabase** (migration `0217`), via `apps/api/src/routes/marketing.ts` | Houzs has no such tables and we can't add them |
+| Displays, floor plans, launch requests | **2990's Supabase** (migrations `0217`, `0219`), via `apps/api/src/routes/marketing.ts` | Houzs has no such tables and we can't add them |
+| Sofa Category → Function lists | **2990's Supabase** `marketing_sofa_options` (migration `0219`) — kept in ⋯ › Maintenance | owner 2026-10-09: fabric, leg and seat come from the SKU Master; these have no source, so Marketing keeps them. A request stores the NAME, so renaming or removing an option never changes a saved request |
 | Sales lines | **Houzs** `GET /api/scm/sales-analysis/lines` (their `scm/lib/sales-lines.ts`) | the orders live there |
 | Showroom list | **2990's Supabase** `marketing_showrooms` (migration `0218`) — added, renamed and removed in the Showroom display tab | owner 2026-10-09: it is a record of what is on each floor, not the order form's branch list. Until 0218 it was Houzs `/venues`; `venue_id` kept its name but is now a FK to this table |
 
@@ -456,7 +459,16 @@ piece on display or an open launch request** (the dialog says so before the
 server does). Sales analysis does not use this list: its showroom filter is the
 venue each Houzs order was placed at.
 
-**Seven things that will bite you:**
+**Eight things that will bite you:**
+- 🔑 **Saving a launch request at all — even to Pending Info — needs more than
+  the design said** (owner 2026-10-09, #806): the supplier code on every
+  category, and on a sofa its size (L × W, whole cm), photo (marked Exact or
+  Non-exact; a Non-exact one needs its note), category and function. The form
+  marks them Required; the API refuses the same list (`saveGaps`, 400
+  `missing_fields`), so a script or test that posts a bare request gets a 400.
+  The photo is **inline on the request row** (`photo_b64`, like a floor plan):
+  `/state` must never select it — `GET /marketing/requests/:id/photo` reads it,
+  and a display reads its request's photo through `source_request_id`.
 - 🔑 **`/marketing` is authenticated, not Origin-gated** — unlike campaign-promos.
   The Houzs bearer is replayed to Houzs `/auth/me` (`lib/houzs-identity.ts`, the
   `/commission` pattern) and Houzs's answer decides. It runs on the service-role
