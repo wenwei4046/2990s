@@ -1,16 +1,20 @@
 // New product / Edit new product — the launch request form (design screen
-// 08). A brand-new request needs only the showroom and Add / Replace to save;
-// everything else can be filled later. When editing an existing request, every
+// 08). To save at all a request needs its showroom, Add / Replace and
+// supplier code, and a sofa also its size, photo, category and function
+// (owner 2026-10-09) — those carry a Required tag while empty. Everything
+// else can be filled later. When editing an existing request, every other
 // empty field carries a TO FILL tag, and Complete needs them all.
 
-import { useState } from 'react';
-import { Pencil, X } from 'lucide-react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { ImageUp, Pencil, Upload, X } from 'lucide-react';
 import {
-  compLine, missingOf, RM, requestTotal, SAVE_REQUIRED, shapeName, specOf, TYPES,
+  cmOf, compLine, hasPhoto, missingOf, RM, requestTotal, saveBlockersOf, saveMissingOf, shapeName, specOf, TYPES,
   type DisplayItem, type LaunchRequest, type RequestStatus, type RequestType,
 } from './marketing-model';
 import { coloursOf, withValue, type MarketingOptions } from './marketing-options';
-import { useSaveRequest, type ShowroomOption } from '../../lib/marketing-api';
+import {
+  preparePhoto, useRequestPhoto, useSaveRequest, type ShowroomOption, type SofaCategoryOption,
+} from '../../lib/marketing-api';
 import { ComponentBuilder } from './ComponentBuilder';
 import { SofaBlueprint } from './SofaBlueprint';
 import s from './marketing.module.css';
@@ -18,24 +22,46 @@ import s from './marketing.module.css';
 type BuilderTarget = { target: 'draft' } | { target: 'combo'; idx: number };
 
 const ToFill = ({ on }: { on: boolean }) => (on ? <span className={s.toFillTag}>TO FILL</span> : null);
+/** Needed even to save — shown while the field is empty, on a new request too. */
+const Req = ({ on }: { on: boolean }) => (on ? <span className={s.reqTag}>Required</span> : null);
 const empty = (v: unknown) => !String(v ?? '').trim();
+const bg = (url: string | null) => (url ? { backgroundImage: `url("${url}")` } : undefined);
 
-export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displays, onSaved }: {
+export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displays, sofaOptions, onSaved }: {
   draft: LaunchRequest;
   setDraft: (d: LaunchRequest | null) => void;
   opts: MarketingOptions;
   showrooms: ShowroomOption[];
   displays: DisplayItem[];
+  /** Category → Function lists, kept in Marketing → ⋯ → Maintenance. */
+  sofaOptions: SofaCategoryOption[];
   onSaved: (status: RequestStatus) => void;
 }) => {
   const [err, setErr] = useState('');
   const [builder, setBuilder] = useState<BuilderTarget | null>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [viewing, setViewing] = useState(false);
   const save = useSaveRequest();
+  // The saved photo, when this form has not picked a new one.
+  const saved = useRequestPhoto(d.photoUpload ? null : d.id, d.photoUpload ? null : d.photoAt);
+  const photoSrc = d.photoUpload
+    ? `data:${d.photoUpload.contentType};base64,${d.photoUpload.dataB64}`
+    : saved.data?.dataUrl ?? null;
+
+  // The draft as last rendered — a photo is prepared asynchronously, and its
+  // patch must not undo what was typed meanwhile, nor reopen a closed form.
+  const latest = useRef(d);
+  latest.current = d;
+  const open = useRef(true);
+  useEffect(() => {
+    open.current = true;
+    return () => { open.current = false; };
+  }, []);
 
   /** The design's setDraft: a Replace keeps a valid same-category candidate
    *  selected (the first one by default); leaving Replace clears it. */
   const patch = (p: Partial<LaunchRequest>) => {
-    const next = { ...d, ...p };
+    const next = { ...latest.current, ...p };
     if (('showroomId' in p || 'type' in p || 'action' in p) && next.action === 'replace') {
       const c = displays.filter((x) => x.venueId === next.showroomId && x.type === next.type);
       if (!c.find((x) => x.id === next.replaceId)) next.replaceId = c[0]?.id ?? null;
@@ -48,7 +74,8 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
   const isEdit = !!d.id;
   const miss = missingOf(d);
   const ok = miss.length === 0;
-  const saveNeeds = miss.filter((m) => (SAVE_REQUIRED as readonly string[]).includes(m));
+  const saveNeeds = saveMissingOf(d);
+  const blockers = saveBlockersOf(d);
   const tl = TYPES.find((t) => t.id === d.type)!.label.toLowerCase();
   const cands = displays.filter((x) => x.venueId === d.showroomId && x.type === d.type);
   const rep = cands.find((c) => c.id === d.replaceId) ?? null;
@@ -64,20 +91,41 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
   const sizeOpts = withValue(isBed ? opts.bedframeSizes : opts.mattressSizes, d.size);
   const nd = (isEmpty: boolean) => isEmpty && isEdit;
   const rowsIncomplete = !d.rows.length || d.rows.some((x) => !(Number(x.price) > 0));
+  const sizeMissing = !(cmOf(d.lengthCm) && cmOf(d.widthCm));
+  const functionsOf = (category: string) => sofaOptions.find((c) => c.name === category)?.functions.map((f) => f.name) ?? [];
+  const categoryOpts = withValue(sofaOptions.map((c) => c.name), d.sofaCategory);
+  const functionOpts = withValue(functionsOf(d.sofaCategory), d.sofaFunction);
 
   const statusText = ok ? 'All info filled — ready to Complete'
     : isEdit ? `${miss.length} field${miss.length > 1 ? 's' : ''} still needed`
-    : (d.showroomId && d.action && !(d.action === 'replace' && !d.replaceId)) ? 'Ready to save — the rest can be filled later' : 'Required to save';
-  const statusOk = ok || (!isEdit && !!d.showroomId && !!d.action);
+    : saveNeeds.length === 0 ? 'Ready to save — the rest can be filled later' : 'Required to save';
+  const statusOk = ok || (!isEdit && blockers.length === 0);
   const chipsShown = isEdit ? miss : saveNeeds;
+
+  /** A new photo asks the Exact / Non-exact question again: it is about this
+   *  photo, not the last one. */
+  const onPhotoFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    setPhotoBusy(true);
+    try {
+      const photoUpload = await preparePhoto(f);
+      if (open.current) patch({ photoUpload, photoMatch: '' });
+    } catch (x) {
+      if (open.current) setErr(`Photo not added — ${(x as Error).message}`);
+    } finally {
+      if (open.current) setPhotoBusy(false);
+    }
+  };
 
   const submit = async (status: RequestStatus) => {
     if (status === 'completed' && !ok) {
       setErr('Fill in the highlighted fields to Complete, or Save & close to keep it in Pending Info.');
       return;
     }
-    if (!d.showroomId || !d.action) {
-      setErr('Choose the showroom and whether this is an Add or a Replace before saving.');
+    if (blockers.length) {
+      setErr(`Still needed to save: ${blockers.join(', ')}.`);
       return;
     }
     try {
@@ -109,8 +157,8 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
             <div>
               <div className={s.modalTitle}>{isEdit ? 'Edit new product' : 'New product launch'}</div>
               {isEdit
-                ? <div className={s.modalSub}>Fields marked <span className={s.toFillBadge}>TO FILL</span> are still empty. Fill them in, then Complete.</div>
-                : <div className={s.modalSub}>Anyone can fill this in. Only the showroom and Add / Replace are required to save — the rest can be completed later.</div>}
+                ? <div className={s.modalSub}>Fields marked <span className={s.toFillBadge}>TO FILL</span> are still empty. Fill them in, then Complete. Fields marked <span className={s.reqBadge}>Required</span> are needed even to save.</div>
+                : <div className={s.modalSub}>Anyone can fill this in. Fields marked <span className={s.reqBadge}>Required</span> are needed to save — the rest can be completed later.</div>}
             </div>
             <button type="button" className={s.closeBtn} aria-label="Close" onClick={() => setDraft(null)}>
               <X size={18} strokeWidth={1.75} className={s.icon} />
@@ -197,14 +245,122 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
 
               <div className={s.twoCol}>
                 <label className={s.field}>
-                  <span className={s.fieldLabel}>Supplier code<ToFill on={nd(empty(d.supplierCode))} /></span>
-                  <input className={`${s.input} ${s.inputBold}`} value={d.supplierCode} onChange={(e) => patch({ supplierCode: e.target.value })} placeholder="Leave blank if not decided" />
+                  <span className={s.fieldLabel}>Supplier code<Req on={empty(d.supplierCode)} /></span>
+                  <input className={`${s.input} ${s.inputBold}`} value={d.supplierCode} onChange={(e) => patch({ supplierCode: e.target.value })} placeholder="e.g. SL-2207" />
                 </label>
                 <label className={s.field}>
                   <span className={s.fieldLabel}>Model name<ToFill on={nd(empty(d.model))} /></span>
                   <input className={`${s.input} ${s.inputBold}`} value={d.model} onChange={(e) => patch({ model: e.target.value })} placeholder="Leave blank if not decided" />
                 </label>
               </div>
+
+              {isSofa && (
+                <div className={`${s.field} ${s.fieldSize}`}>
+                  <span className={s.fieldLabel}>Sofa size · length × width<Req on={sizeMissing} /></span>
+                  <span className={s.inchRow}>
+                    <input
+                      type="number" inputMode="numeric" min={1} max={1000} step={1} value={d.lengthCm} placeholder="Length"
+                      aria-label="Length in cm" className={`${s.input} ${s.inputBold} ${s.inchInput}`}
+                      onChange={(e) => patch({ lengthCm: e.target.value })}
+                    />
+                    <span className={s.inchUnit}>×</span>
+                    <input
+                      type="number" inputMode="numeric" min={1} max={1000} step={1} value={d.widthCm} placeholder="Width"
+                      aria-label="Width in cm" className={`${s.input} ${s.inputBold} ${s.inchInput}`}
+                      onChange={(e) => patch({ widthCm: e.target.value })}
+                    />
+                    <span className={s.inchUnit}>cm</span>
+                  </span>
+                </div>
+              )}
+
+              {isSofa && (
+                <div className={s.twoCol}>
+                  <label className={s.field}>
+                    <span className={s.fieldLabel}>Category<Req on={!d.sofaCategory} /></span>
+                    <select
+                      className={`${s.select} ${s.inputBold}`} value={d.sofaCategory}
+                      onChange={(e) => {
+                        // Keep the function when the new category offers it too (Fixed, say).
+                        const keep = functionsOf(e.target.value).includes(d.sofaFunction);
+                        patch({ sofaCategory: e.target.value, sofaFunction: keep ? d.sofaFunction : '' });
+                      }}
+                    >
+                      <option value="">—</option>
+                      {categoryOpts.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                    {sofaOptions.length === 0 && <span className={s.replaceHint}>No categories yet — add them in ⋯ › Maintenance.</span>}
+                  </label>
+                  <label className={s.field}>
+                    <span className={s.fieldLabel}>Function<Req on={!d.sofaFunction} /></span>
+                    <select
+                      className={`${s.select} ${s.inputBold}`} value={d.sofaFunction} disabled={!d.sofaCategory}
+                      onChange={(e) => patch({ sofaFunction: e.target.value })}
+                    >
+                      <option value="">{d.sofaCategory ? '—' : 'Choose a category first'}</option>
+                      {functionOpts.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                    {d.sofaCategory && functionOpts.length === 0 && (
+                      <span className={s.replaceHint}>No functions under {d.sofaCategory} yet — add them in ⋯ › Maintenance.</span>
+                    )}
+                  </label>
+                </div>
+              )}
+
+              {isSofa && (
+                <div className={s.field}>
+                  <span className={s.fieldLabel}>Photo<Req on={!hasPhoto(d)} /></span>
+                  {!hasPhoto(d) ? (
+                    <label className={s.planStrip}>
+                      <span className={s.planStripIcon}><ImageUp size={20} strokeWidth={1.75} className={s.icon} /></span>
+                      <span className={s.planStripText}>
+                        <span className={s.planStripTitle}>{photoBusy ? 'Preparing the photo…' : 'Upload a photo of the sofa'}</span>
+                        <span className={s.planStripSub}>So Marketing can see what it looks like · JPG or PNG</span>
+                      </span>
+                      <span className={s.planStripPill}>Upload</span>
+                      <input type="file" accept="image/*" className={s.hiddenFile} disabled={photoBusy} onChange={(e) => void onPhotoFile(e)} />
+                    </label>
+                  ) : (
+                    <div className={s.photoCard}>
+                      <button
+                        type="button" className={s.photoThumb} style={bg(photoSrc)} disabled={!photoSrc}
+                        aria-label="View the photo larger" onClick={() => setViewing(true)}
+                      >
+                        {!photoSrc && <span className={s.photoThumbText}>{saved.isError ? 'Photo could not load' : 'Loading…'}</span>}
+                      </button>
+                      <div className={s.photoSide}>
+                        <span className={s.fieldLabel}>Is it the sofa in the photo?<Req on={!d.photoMatch} /></span>
+                        <div className={s.actionRow}>
+                          {([['exact', 'Exact'], ['non_exact', 'Non-exact']] as const).map(([id, label]) => (
+                            <button key={id} type="button" className={`${s.actionChip} ${d.photoMatch === id ? s.chipOn : ''}`} onClick={() => patch({ photoMatch: id })}>
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        <span className={s.replaceHint}>
+                          {d.photoMatch === 'exact' ? 'The same sofa as in the photo.'
+                            : d.photoMatch === 'non_exact' ? 'Like the sofa in the photo, with some details changed.'
+                            : 'Exact: the same sofa. Non-exact: like it, with some details changed.'}
+                        </span>
+                        {d.photoMatch === 'non_exact' && (
+                          <label className={s.field}>
+                            <span className={s.fieldLabel}>Note · what is different<Req on={empty(d.photoNote)} /></span>
+                            <textarea
+                              className={`${s.input} ${s.inputBold} ${s.noteInput}`} rows={2} maxLength={500} value={d.photoNote}
+                              placeholder="e.g. slimmer arms, no stitching on the seat"
+                              onChange={(e) => patch({ photoNote: e.target.value })}
+                            />
+                          </label>
+                        )}
+                        <label className={s.photoReplace}>
+                          <Upload size={16} strokeWidth={1.75} className={s.icon} />{photoBusy ? 'Preparing…' : 'Replace photo'}
+                          <input type="file" accept="image/*" className={s.hiddenFile} disabled={photoBusy} onChange={(e) => void onPhotoFile(e)} />
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {showFabric && (
                 <div className={s.twoCol}>
@@ -380,6 +536,15 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
           onCancel={() => setBuilder(null)}
           onSave={saveBuilt}
         />
+      )}
+
+      {viewing && photoSrc && (
+        <div className={s.lightbox} role="dialog" aria-label="Photo of the sofa" onClick={() => setViewing(false)}>
+          <img src={photoSrc} alt="The sofa" className={s.lightboxImg} />
+          <button type="button" className={s.lightboxClose} aria-label="Close" onClick={() => setViewing(false)}>
+            <X size={20} strokeWidth={1.75} className={s.icon} />
+          </button>
+        </div>
       )}
     </>
   );

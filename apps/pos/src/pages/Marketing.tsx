@@ -3,12 +3,15 @@
 //   display — what is on the floor in every showroom
 //   launch  — the Management → Marketing hand-off for new products
 //   sales   — sales analysis (moved here from Maintain, redesigned)
+// plus a fourth behind ⋯ at the end of the tab bar (owner 2026-10-09):
+//   maintenance — the option lists Marketing keeps itself (sofa Category →
+//                 Function for the New product form)
 // The shell follows the design's recipe: Topbar → ← Catalog + title +
 // per-tab subtitle → per-tab controls on the right → tab bar.
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { ArrowLeft, Plus } from 'lucide-react';
+import { ArrowLeft, MoreHorizontal, Plus, SlidersHorizontal } from 'lucide-react';
 import { Topbar } from '../components/Topbar';
 import { useStaff } from '../lib/staff';
 import { useMarketingAccess } from '../lib/houzs-perms';
@@ -18,19 +21,22 @@ import { blankRequest, type LaunchRequest } from '../components/marketing/market
 import { ShowroomDisplayTab } from '../components/marketing/ShowroomDisplayTab';
 import { ProductLaunchTab } from '../components/marketing/ProductLaunchTab';
 import { SalesAnalysisTab } from '../components/marketing/SalesAnalysisTab';
+import { MaintenanceTab } from '../components/marketing/MaintenanceTab';
 import { DateRangePicker } from '../components/marketing/DateRangePicker';
 import { Toast, useToast } from '../components/marketing/Toast';
 import s from '../components/marketing/marketing.module.css';
 
-type TabId = 'display' | 'launch' | 'sales';
+type TabId = 'display' | 'launch' | 'sales' | 'maintenance';
 const TABS: Array<[TabId, string]> = [['display', 'Showroom display'], ['launch', 'Product launching'], ['sales', 'Sales analysis']];
 const SUBTITLE: Record<TabId, string> = {
   display: 'What is on the floor at each showroom',
   launch: 'New products from Management to Marketing',
   sales: 'Product performance and customer profile',
+  maintenance: 'The option lists Marketing keeps for its forms',
 };
 
-const asTab = (v: string | null): TabId => (v === 'launch' || v === 'sales' ? v : 'display');
+const asTab = (v: string | null): TabId =>
+  (v === 'launch' || v === 'sales' || v === 'maintenance' ? v : 'display');
 
 /** How a person is labelled on a request they file: the marketing account is
  *  "Marketing"; anyone else by their POS role, as the Topbar shows it. */
@@ -58,6 +64,7 @@ export const Marketing = () => {
 
   const { toast, show } = useToast();
   const [draft, setDraft] = useState<LaunchRequest | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   /* Sales analysis: the range lives here because its picker sits in the page
      header, beside the tab bar, as in the design. */
@@ -116,6 +123,40 @@ export const Marketing = () => {
               {id === 'launch' && completed > 0 && <span className={s.tabBadge}>{completed}</span>}
             </button>
           ))}
+          {tab === 'maintenance' && (
+            <button type="button" role="tab" aria-selected className={`${s.tab} ${s.tabActive}`}>Maintenance</button>
+          )}
+          <div className={s.moreWrap}>
+            <button
+              type="button"
+              className={`${s.moreBtn} ${moreOpen ? s.moreBtnOpen : ''}`}
+              aria-label="More"
+              aria-haspopup="menu"
+              aria-expanded={moreOpen}
+              onClick={() => setMoreOpen((o) => !o)}
+            >
+              <MoreHorizontal size={20} strokeWidth={1.75} className={s.icon} />
+            </button>
+            {moreOpen && (
+              <>
+                <div className={s.rpScrim} onClick={() => setMoreOpen(false)} />
+                <div className={s.morePop} role="menu">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={s.moreItem}
+                    onClick={() => { setMoreOpen(false); setTab('maintenance'); }}
+                  >
+                    <SlidersHorizontal size={20} strokeWidth={1.75} className={`${s.icon} ${s.moreItemIcon}`} />
+                    <span className={s.moreItemText}>
+                      <span className={s.moreItemTitle}>Maintenance</span>
+                      <span className={s.moreItemSub}>Sofa category and function lists</span>
+                    </span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {tab !== 'sales' && state.isLoading && <p className={s.loading}>Loading…</p>}
@@ -127,6 +168,7 @@ export const Marketing = () => {
         {tab === 'launch' && state.data && (
           <ProductLaunchTab state={state.data} draft={draft} setDraft={setDraft} toast={show} />
         )}
+        {tab === 'maintenance' && state.data && <MaintenanceTab state={state.data} toast={show} />}
         {tab === 'sales' && (
           <>
             {lines.isLoading && <p className={s.loading}>Loading…</p>}

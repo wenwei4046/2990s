@@ -42,6 +42,14 @@ export interface DisplayItem {
   divan: string;
   gap: string;
   qty: number;
+  /** Length × width in cm, carried from its launch request by Arrive (0219);
+   *  null on a piece recorded by hand. */
+  lengthCm: number | null;
+  widthCm: number | null;
+  sofaCategory: string;
+  sofaFunction: string;
+  /** The launch request it arrived from — its photo is read through it. */
+  sourceRequestId: string | null;
 }
 
 /** One combo on a launch request's reference price list. `price` is the raw
@@ -50,6 +58,17 @@ export interface ComboRow {
   modules: string[];
   price: string;
 }
+
+/** An image downscaled in the browser and ready to send (lib/marketing-api.ts). */
+export interface PreparedImage {
+  contentType: string;
+  dataB64: string;
+  fileName: string;
+}
+
+/** Is the sofa in the photo the sofa coming (Exact), or one like it with some
+ *  details changed (Non-exact)? '' until chosen. */
+export type PhotoMatch = '' | 'exact' | 'non_exact';
 
 /** A Management → Marketing new-product request (the draft and the saved
  *  record share this shape, as in the design). */
@@ -68,6 +87,20 @@ export interface LaunchRequest {
   divan: string;
   gap: string;
   modules: string[];
+  /* Sofa only (owner 2026-10-09, migration 0219). */
+  /** Length × width in cm, the raw input text — '' until typed. */
+  lengthCm: string;
+  widthCm: string;
+  /** Names from Marketing's own lists (Maintenance), as saved. */
+  sofaCategory: string;
+  sofaFunction: string;
+  /** The saved photo's version (when it was uploaded); null when none is saved. */
+  photoAt: string | null;
+  /** A photo picked in this form, not saved yet — sent with the next save. */
+  photoUpload: PreparedImage | null;
+  photoMatch: PhotoMatch;
+  /** What differs from the photo — a Non-exact photo needs it. */
+  photoNote: string;
   rows: ComboRow[];
   showroomId: string;
   action: RequestAction;
@@ -80,9 +113,28 @@ export interface LaunchRequest {
 
 export const blankRequest = (by: string, byRole: string): LaunchRequest => ({
   id: null, type: 'sofa', status: 'pending', supplierCode: '', model: '', fabric: '', colour: '', leg: '', seat: '',
-  size: '', height: '', divan: '', gap: '', modules: [], rows: [], showroomId: '', action: '', replaceId: null,
+  size: '', height: '', divan: '', gap: '', modules: [], lengthCm: '', widthCm: '', sofaCategory: '', sofaFunction: '',
+  photoAt: null, photoUpload: null, photoMatch: '', photoNote: '', rows: [], showroomId: '', action: '', replaceId: null,
   by, byRole, created: '',
 });
+
+/** A typed length or width as whole cm (1–1000, rounded), or null when blank
+ *  or not a usable size. */
+export function cmOf(v: string | number | null | undefined): number | null {
+  if (v == null || String(v).trim() === '') return null;
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= 1 && n <= 1000 ? n : null;
+}
+
+/** '220 × 95 cm', or '' while either side is missing. */
+export const sizeText = (length: string | number | null | undefined, width: string | number | null | undefined): string => {
+  const l = cmOf(length);
+  const w = cmOf(width);
+  return l && w ? `${l} × ${w} cm` : '';
+};
+
+/** A saved photo, or one picked in the form and not saved yet. */
+export const hasPhoto = (r: Pick<LaunchRequest, 'photoAt' | 'photoUpload'>): boolean => !!(r.photoAt || r.photoUpload);
 
 /* ── names ─────────────────────────────────────────────────────────────────── */
 
@@ -209,13 +261,22 @@ export function tagsOf(it: SpecFields): string[] {
   return t;
 }
 
-export function detailRows(it: SpecFields): Array<{ k: string; v: string }> {
+type DetailFields = SpecFields & Partial<Pick<DisplayItem, 'lengthCm' | 'widthCm' | 'sofaCategory' | 'sofaFunction'>>;
+
+export function detailRows(it: DetailFields): Array<{ k: string; v: string }> {
   const v = (x: string) => x || '—';
   if (it.type === 'sofa') {
-    return [
+    const rows = [
       { k: 'Layout', v: shapeName(it.modules) }, { k: 'Seat', v: v(it.seat) }, { k: 'Fabric series', v: v(it.fabric) },
       { k: 'Colour', v: v(it.colour) }, { k: 'Leg height', v: v(it.leg) },
     ];
+    // Carried from a launch request by Arrive (0219); a piece recorded by hand
+    // never had them, so their rows only appear when there is something to say.
+    const size = sizeText(it.lengthCm, it.widthCm);
+    if (size) rows.push({ k: 'Size', v: size });
+    if (it.sofaCategory) rows.push({ k: 'Category', v: it.sofaCategory });
+    if (it.sofaFunction) rows.push({ k: 'Function', v: it.sofaFunction });
+    return rows;
   }
   if (it.type === 'mattress') return [{ k: 'Display size', v: v(it.size) }, { k: 'Mattress height', v: v(inch(it.height)) }];
   if (it.type === 'bedframe') {
@@ -230,12 +291,20 @@ export function detailRows(it: SpecFields): Array<{ k: string; v: string }> {
 /* ── launch requests ───────────────────────────────────────────────────────── */
 
 /** Everything a request still needs before it can be Completed, in the
- *  design's order. Saving (Pending Info) needs only Showroom + Add / Replace. */
+ *  design's order. Saving (Pending Info) needs the SAVE_REQUIRED ones. */
 export function missingOf(r: LaunchRequest): string[] {
   const m: string[] = [];
   if (!r.supplierCode.trim()) m.push('Supplier code');
   if (!r.model.trim()) m.push('Model name');
   if (r.type === 'sofa' && !r.modules.length) m.push('Components');
+  if (r.type === 'sofa') {
+    if (!(cmOf(r.lengthCm) && cmOf(r.widthCm))) m.push('Sofa size');
+    if (!r.sofaCategory) m.push('Category');
+    if (!r.sofaFunction) m.push('Function');
+    if (!hasPhoto(r)) m.push('Photo');
+    else if (!r.photoMatch) m.push('Exact / Non-exact');
+    else if (r.photoMatch === 'non_exact' && !r.photoNote.trim()) m.push('Photo note');
+  }
   if (r.type === 'sofa' || r.type === 'bedframe') {
     if (!r.fabric) m.push('Fabric series');
     if (!r.colour) m.push('Colour');
@@ -255,8 +324,24 @@ export function missingOf(r: LaunchRequest): string[] {
   return m;
 }
 
-/** The three fields a brand-new request needs before it can be saved. */
-export const SAVE_REQUIRED = ['Showroom', 'Add / Replace', 'Item to replace'] as const;
+/** What a request needs before it can be saved at all, even to Pending Info.
+ *  The design asked for the showroom and Add / Replace; the owner added the
+ *  supplier code on every category, and a sofa's size, photo, category and
+ *  function (2026-10-09). The API refuses the same list (routes/marketing.ts,
+ *  saveGaps) under the same labels. */
+export const SAVE_REQUIRED = [
+  'Supplier code', 'Sofa size', 'Category', 'Function', 'Photo', 'Exact / Non-exact', 'Photo note',
+  'Showroom', 'Add / Replace', 'Item to replace',
+] as const;
+
+/** The SAVE_REQUIRED fields this request is still missing. */
+export const saveMissingOf = (r: LaunchRequest): string[] =>
+  missingOf(r).filter((m) => (SAVE_REQUIRED as readonly string[]).includes(m));
+
+/** What stops Save & close. As saveMissingOf, except the piece to replace: a
+ *  pending Replace may wait for its showroom to have one (the API's rule). */
+export const saveBlockersOf = (r: LaunchRequest): string[] =>
+  saveMissingOf(r).filter((m) => m !== 'Item to replace');
 
 /** Σ typed combo prices (RM). */
 export const requestTotal = (r: Pick<LaunchRequest, 'rows'>): number =>
@@ -267,6 +352,14 @@ export interface ExportContext {
   replaceItem: DisplayItem | null;
   moduleLabel?: (code: string) => string | null | undefined;
 }
+
+/** How the brief describes the photo, which travels beside it (Save photo). */
+const photoLine = (r: LaunchRequest): string => {
+  if (!hasPhoto(r)) return '-';
+  if (r.photoMatch === 'exact') return 'Exact — the sofa in the photo';
+  if (r.photoMatch === 'non_exact') return `Non-exact — ${r.photoNote.trim() || 'details differ'}`;
+  return 'Attached';
+};
 
 /** The plain-text brief for Procurement (WhatsApp / email). */
 export function exportText(r: LaunchRequest, ctx: ExportContext): string {
@@ -284,6 +377,10 @@ export function exportText(r: LaunchRequest, ctx: ExportContext): string {
   if (r.type === 'sofa') {
     L.push(`Seat          : ${v(r.seat)}`);
     L.push(`Layout        : ${shapeName(r.modules)}`);
+    L.push(`Size (L × W)  : ${v(sizeText(r.lengthCm, r.widthCm))}`);
+    L.push(`Category      : ${v(r.sofaCategory)}`);
+    L.push(`Function      : ${v(r.sofaFunction)}`);
+    L.push(`Photo         : ${photoLine(r)}`);
     L.push('');
     L.push('Compartments (left to right):');
     r.modules.forEach((m, i) => {

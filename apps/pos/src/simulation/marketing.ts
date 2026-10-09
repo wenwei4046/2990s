@@ -4,11 +4,16 @@
 // checked against the design without touching a live system. Never calls fetch.
 
 // v2: the showroom list moved into the store (0218).
-const KEY = '2990:mobile-simulation:marketing:v2';
+// v3: sofa size, photo, category / function and the Maintenance lists (0219).
+const KEY = '2990:mobile-simulation:marketing:v3';
+// Photos live under their own key, so a full localStorage loses a photo, not the store.
+const PHOTO_KEY = `${KEY}:photos`;
 const PERSONA_KEY = '2990:simulation:persona';
 
 type Row = Record<string, any>;
-interface MarketingStore { showrooms: Row[]; displays: Row[]; floorplans: Record<string, Row>; requests: Row[]; serial: number }
+interface MarketingStore {
+  showrooms: Row[]; displays: Row[]; floorplans: Record<string, Row>; requests: Row[]; options: Row[]; serial: number;
+}
 
 const now = () => new Date().toISOString();
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
@@ -28,10 +33,24 @@ export const simulationPersona = (): SimulationPersona => {
 
 const display = (id: string, venueId: string, type: string, name: string, code: string, photoUrl: string | null, extra: Row = {}): Row => ({
   id, venue_id: venueId, type, model_id: null, name, code, photo_url: photoUrl, is_new: false, fabric: '', colour: '', leg: '', seat: '',
-  modules: [], size: '', height: '', divan: '', gap: '', qty: 1, created_at: '2026-10-01T02:00:00.000Z', created_by_name: 'Demo', removed_at: null, ...extra,
+  modules: [], size: '', height: '', divan: '', gap: '', qty: 1, length_cm: null, width_cm: null, sofa_category: '', sofa_function: '',
+  source_request_id: null, created_at: '2026-10-01T02:00:00.000Z', created_by_name: 'Demo', removed_at: null, ...extra,
 });
 
 const showroom = (id: string, name: string, area: string): Row => ({ id, name, area, archived_at: null });
+
+const option = (id: string, kind: string, parentId: string | null, name: string, seq: number): Row =>
+  ({ id, kind, parent_id: parentId, name, seq, archived_at: null });
+
+/** 0219's seed: the owner's starting lists. */
+const seedOptions = (): Row[] => [
+  option('sim-o1', 'category', null, 'Seater', 1),
+  option('sim-o2', 'category', null, 'Chair', 2),
+  option('sim-o3', 'function', 'sim-o1', 'Fixed', 3),
+  option('sim-o4', 'function', 'sim-o1', 'Push back', 4),
+  option('sim-o5', 'function', 'sim-o1', 'Slide out', 5),
+  option('sim-o6', 'function', 'sim-o2', 'Fixed', 6),
+];
 
 function seed(): MarketingStore {
   const kl = 'demo-venue-kl';
@@ -70,6 +89,7 @@ function seed(): MarketingStore {
         requested_by_name: 'Marketing', requested_by_role: 'Marketing', created_at: '2026-10-02T02:00:00.000Z',
       },
     ],
+    options: seedOptions(),
   };
 }
 
@@ -84,23 +104,73 @@ function store(): MarketingStore {
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(store())); } catch { /* in-memory still works */ } }
 
+/** Request photos by request id: { content_type, image_b64, file_name, updated_at }. */
+let photoMemory: Record<string, Row> | undefined;
+function photos(): Record<string, Row> {
+  if (photoMemory) return photoMemory;
+  try {
+    const raw = localStorage.getItem(PHOTO_KEY);
+    if (raw) return (photoMemory = JSON.parse(raw) as Record<string, Row>);
+  } catch { /* start without */ }
+  return (photoMemory = {});
+}
+function savePhotos() { try { localStorage.setItem(PHOTO_KEY, JSON.stringify(photos())); } catch { /* too big — kept in memory */ } }
+
 const showroomWire = (r: Row) => ({ id: r.id, name: r.name, area: r.area });
 const displayWire = (r: Row) => ({
   id: r.id, venueId: r.venue_id, type: r.type, modelId: r.model_id, name: r.name, code: r.code, photoUrl: r.photo_url, isNew: r.is_new,
   fabric: r.fabric, colour: r.colour, leg: r.leg, seat: r.seat, modules: r.modules, size: r.size, height: r.height, divan: r.divan,
-  gap: r.gap, qty: r.qty, createdAt: r.created_at, createdByName: r.created_by_name,
+  gap: r.gap, qty: r.qty, lengthCm: r.length_cm ?? null, widthCm: r.width_cm ?? null, sofaCategory: r.sofa_category ?? '',
+  sofaFunction: r.sofa_function ?? '', sourceRequestId: r.source_request_id ?? null, createdAt: r.created_at, createdByName: r.created_by_name,
 });
 const requestWire = (r: Row) => ({
   id: r.id, type: r.type, status: r.status, supplierCode: r.supplier_code, model: r.model, fabric: r.fabric, colour: r.colour, leg: r.leg,
   seat: r.seat, size: r.size, height: r.height, divan: r.divan, gap: r.gap, modules: r.modules, rows: r.combo_rows, venueId: r.venue_id,
+  lengthCm: r.length_cm ?? null, widthCm: r.width_cm ?? null, sofaCategory: r.sofa_category ?? '', sofaFunction: r.sofa_function ?? '',
+  photoMatch: r.photo_match ?? '', photoNote: r.photo_note ?? '', photoAt: photos()[r.id]?.updated_at ?? null,
   action: r.action, replaceId: r.replace_display_id, by: r.requested_by_name, byRole: r.requested_by_role, createdAt: r.created_at, updatedAt: r.created_at,
 });
 const requestCols = (b: Row) => ({
   type: b.type, status: b.status, supplier_code: b.supplierCode ?? '', model: b.model ?? '', fabric: b.fabric ?? '', colour: b.colour ?? '',
   leg: b.leg ?? '', seat: b.seat ?? '', size: b.size ?? '', height: b.height ?? '', divan: b.divan ?? '', gap: b.gap ?? '',
-  modules: b.modules ?? [], combo_rows: b.rows ?? [], venue_id: b.venueId, action: b.action,
+  modules: b.modules ?? [], length_cm: b.lengthCm ?? null, width_cm: b.widthCm ?? null, sofa_category: b.sofaCategory ?? '',
+  sofa_function: b.sofaFunction ?? '', photo_match: b.photoMatch ?? '', photo_note: b.photoMatch === 'non_exact' ? (b.photoNote ?? '') : '',
+  combo_rows: b.rows ?? [], venue_id: b.venueId, action: b.action,
   replace_display_id: b.action === 'replace' ? (b.replaceId ?? null) : null,
 });
+
+/** The API's saveGaps (routes/marketing.ts), so the simulation refuses what live would. */
+const saveGaps = (b: Row, hasPhoto: boolean): string[] => {
+  const g: string[] = [];
+  if (!String(b.supplierCode ?? '').trim()) g.push('Supplier code');
+  if (b.type === 'sofa') {
+    if (!b.lengthCm || !b.widthCm) g.push('Sofa size');
+    if (!b.sofaCategory) g.push('Category');
+    if (!b.sofaFunction) g.push('Function');
+    if (!hasPhoto) g.push('Photo');
+    else if (!b.photoMatch) g.push('Exact / Non-exact');
+    else if (b.photoMatch === 'non_exact' && !String(b.photoNote ?? '').trim()) g.push('Photo note');
+  }
+  return g;
+};
+const gapsReply = (gaps: string[]) => json({
+  error: 'missing_fields', missing: gaps,
+  reason: `Fill in ${gaps.join(', ')} before saving. If the form does not show ${gaps.length === 1 ? 'it' : 'them'}, reload the POS.`,
+}, 400);
+const keepPhoto = (id: string, p: Row | undefined) => {
+  if (!p) return;
+  photos()[id] = { content_type: p.contentType, image_b64: p.dataB64, file_name: p.fileName ?? '', updated_at: now() };
+  savePhotos();
+};
+
+/** /state's two-level list: each live category with its live functions. */
+const optionsWire = (rows: Row[]) => {
+  const live = rows.filter((r) => !r.archived_at).sort((a, b) => a.seq - b.seq);
+  return live.filter((r) => r.kind === 'category').map((c) => ({
+    id: c.id, name: c.name,
+    functions: live.filter((f) => f.kind === 'function' && f.parent_id === c.id).map((f) => ({ id: f.id, name: f.name })),
+  }));
+};
 
 /** Handle a /marketing/* request, or return null when the path is not ours. */
 export function marketingDispatch(path: string, method: string, body: Row): Response | null {
@@ -123,7 +193,53 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
       displays: live.map(displayWire),
       requests: st.requests.filter((r) => r.status === 'pending' || r.status === 'completed').sort((a, b) => b.created_at.localeCompare(a.created_at)).map(requestWire),
       floorplans: Object.values(st.floorplans).map((f) => ({ venueId: f.venue_id, updatedAt: f.updated_at, fileName: f.file_name })),
+      sofaOptions: optionsWire(st.options ?? []),
     });
+  }
+  if (path === '/marketing/sofa-options' && method === 'POST') {
+    const name = String(body.name ?? '').trim();
+    if (!name) return json({ error: 'validation_failed' }, 400);
+    const parentId = body.categoryId ?? null;
+    const live = (st.options ?? []).filter((o) => !o.archived_at);
+    if (parentId && !live.some((o) => o.id === parentId && o.kind === 'category')) {
+      return json({ error: 'unknown_category', reason: 'This category is no longer on the list.' }, 409);
+    }
+    if (live.some((o) => (o.parent_id ?? null) === parentId && String(o.name).toLowerCase() === name.toLowerCase())) {
+      return json({ error: 'duplicate_name', reason: parentId ? `This category already has a function called ${name}.` : `There is already a category called ${name}.` }, 409);
+    }
+    const row = option(`sim-o${st.serial++}`, parentId ? 'function' : 'category', parentId, name, st.serial);
+    st.options = [...(st.options ?? []), row]; save();
+    return json({ option: { id: row.id, kind: row.kind, categoryId: row.parent_id, name: row.name } }, 201);
+  }
+  let o = /^\/marketing\/sofa-options\/([^/]+)$/.exec(path);
+  if (o) {
+    const row = (st.options ?? []).find((x) => x.id === decodeURIComponent(o![1]!) && !x.archived_at);
+    if (!row) return json({ error: 'not_found', reason: 'This option is no longer on the list.' }, 404);
+    if (method === 'PATCH') {
+      const name = String(body.name ?? '').trim();
+      if (!name) return json({ error: 'validation_failed' }, 400);
+      const clash = (st.options ?? []).some((x) => !x.archived_at && x.id !== row.id && (x.parent_id ?? null) === (row.parent_id ?? null)
+        && String(x.name).toLowerCase() === name.toLowerCase());
+      if (clash) return json({ error: 'duplicate_name', reason: `${name} is already on this list.` }, 409);
+      row.name = name; save();
+      return json({ option: { id: row.id, kind: row.kind, categoryId: row.parent_id, name: row.name } });
+    }
+    if (method === 'DELETE') {
+      for (const x of st.options ?? []) if (!x.archived_at && (x.id === row.id || x.parent_id === row.id)) x.archived_at = now();
+      save();
+      return json({ ok: true });
+    }
+  }
+  o = /^\/marketing\/requests\/([^/]+)\/photo$/.exec(path);
+  if (o && method === 'GET') {
+    const id = decodeURIComponent(o[1]!);
+    const row = st.requests.find((r) => r.id === id);
+    if (!row) return json({ error: 'not_found' }, 404);
+    const p = photos()[id];
+    return json({ photo: p ? {
+      dataUrl: `data:${p.content_type};base64,${p.image_b64}`, fileName: p.file_name, updatedAt: p.updated_at,
+      match: row.photo_match ?? '', note: row.photo_note ?? '',
+    } : null });
   }
   if (path === '/marketing/showrooms' && method === 'POST') {
     const name = String(body.name ?? '').trim();
@@ -193,9 +309,12 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
   }
   if (path === '/marketing/requests' && method === 'POST') {
     if (!body.venueId || !body.action) return json({ error: 'validation_failed' }, 400);
+    const gaps = saveGaps(body, !!body.photo);
+    if (gaps.length) return gapsReply(gaps);
     const gone = unlisted(body.venueId);
     if (gone) return gone;
     const row = { id: `sim-r${st.serial++}`, ...requestCols(body), requested_by_name: me.name, requested_by_role: me.role, created_at: now() };
+    keepPhoto(row.id, body.photo);
     st.requests.push(row); save();
     return json({ request: requestWire(row) }, 201);
   }
@@ -212,7 +331,9 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
       }
       const created = display(`sim-d${st.serial++}`, row.venue_id, row.type, row.model, row.supplier_code, null, {
         is_new: true, fabric: row.fabric, colour: row.colour, leg: row.leg, seat: row.seat, modules: row.modules, size: row.size,
-        height: row.height, divan: row.divan, gap: row.gap, created_at: now(), created_by_name: me.name,
+        height: row.height, divan: row.divan, gap: row.gap, length_cm: row.length_cm ?? null, width_cm: row.width_cm ?? null,
+        sofa_category: row.sofa_category ?? '', sofa_function: row.sofa_function ?? '', source_request_id: row.id,
+        created_at: now(), created_by_name: me.name,
       });
       st.displays.push(created);
       row.status = 'arrived';
@@ -220,9 +341,13 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
       return json({ displayId: created.id, removedName });
     }
     if (method === 'PUT') {
+      const gaps = saveGaps(body, !!body.photo || !!photos()[row.id]);
+      if (gaps.length) return gapsReply(gaps);
       const gone = unlisted(body.venueId);
       if (gone) return gone;
-      Object.assign(row, requestCols(body)); save();
+      Object.assign(row, requestCols(body));
+      keepPhoto(row.id, body.photo);
+      save();
       return json({ request: requestWire(row) });
     }
     if (method === 'DELETE') { row.status = 'deleted'; save(); return json({ ok: true }); }
@@ -230,4 +355,4 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
   return json({ error: 'simulation_route_missing', reason: `${method} ${path} has not been implemented.` }, 501);
 }
 
-export function resetMarketingSimulation() { memory = seed(); save(); }
+export function resetMarketingSimulation() { memory = seed(); save(); photoMemory = {}; savePhotos(); }

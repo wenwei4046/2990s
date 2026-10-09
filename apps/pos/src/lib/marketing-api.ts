@@ -1,8 +1,9 @@
 // ----------------------------------------------------------------------------
 // The Marketing section's data, read and written against 2990's own API
-// (apps/api/src/routes/marketing.ts, tables in migrations 0217 + 0218) —
+// (apps/api/src/routes/marketing.ts, tables in migrations 0217–0219) —
 // including the showroom list itself, which the section keeps (owner
-// 2026-10-09: a record, not Houzs's venue master).
+// 2026-10-09: a record, not Houzs's venue master), and the sofa Category →
+// Function lists its Maintenance tab keeps (0219).
 //
 // ── WHY A BARE fetch AND NOT authedFetch ────────────────────────────────────
 // Same wall commission-api.ts documents: `authedFetch` resolves to the HOUZS
@@ -14,8 +15,9 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { bearerToken } from './apiClient';
+import { cmOf } from '../components/marketing/marketing-model';
 import type {
-  ComboRow, DisplayItem, DisplayType, LaunchRequest, RequestAction, RequestStatus, RequestType,
+  ComboRow, DisplayItem, DisplayType, LaunchRequest, PhotoMatch, PreparedImage, RequestAction, RequestStatus, RequestType,
 } from '../components/marketing/marketing-model';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -56,6 +58,8 @@ interface WireDisplay {
   id: string; venueId: string; type: string; modelId: string | null; name: string; code: string;
   photoUrl: string | null; isNew: boolean; fabric: string; colour: string; leg: string; seat: string;
   modules: string[]; size: string; height: string; divan: string; gap: string; qty: number;
+  lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
+  sourceRequestId?: string | null;
 }
 
 interface WireRequest {
@@ -63,9 +67,19 @@ interface WireRequest {
   colour: string; leg: string; seat: string; size: string; height: string; divan: string; gap: string;
   modules: string[]; rows: Array<{ modules: string[]; price: number | null }>; venueId: string;
   action: string; replaceId: string | null; by: string; byRole: string; createdAt: string;
+  lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
+  photoMatch?: string; photoNote?: string; photoAt?: string | null;
 }
 
 export interface FloorplanMeta { venueId: string; updatedAt: string; fileName: string }
+
+/** One sofa category and the functions under it — Marketing's own lists
+ *  (Maintenance), in the order they were added. */
+export interface SofaCategoryOption {
+  id: string;
+  name: string;
+  functions: Array<{ id: string; name: string }>;
+}
 
 export interface MarketingState {
   /** Sorted by name, as the rail and the request form list them. */
@@ -73,18 +87,26 @@ export interface MarketingState {
   displays: DisplayItem[];
   requests: LaunchRequest[];
   floorplans: FloorplanMeta[];
+  sofaOptions: SofaCategoryOption[];
 }
+
+const asMatch = (v: string | undefined): PhotoMatch => (v === 'exact' || v === 'non_exact' ? v : '');
 
 const toDisplay = (w: WireDisplay): DisplayItem => ({
   id: w.id, venueId: w.venueId, type: w.type as DisplayType, modelId: w.modelId, name: w.name, code: w.code,
   photoUrl: w.photoUrl, isNew: w.isNew, fabric: w.fabric, colour: w.colour, leg: w.leg, seat: w.seat,
   modules: w.modules ?? [], size: w.size, height: w.height, divan: w.divan, gap: w.gap, qty: w.qty || 1,
+  lengthCm: w.lengthCm ?? null, widthCm: w.widthCm ?? null, sofaCategory: w.sofaCategory ?? '',
+  sofaFunction: w.sofaFunction ?? '', sourceRequestId: w.sourceRequestId ?? null,
 });
 
 const toRequest = (w: WireRequest): LaunchRequest => ({
   id: w.id, type: w.type as RequestType, status: w.status as RequestStatus, supplierCode: w.supplierCode,
   model: w.model, fabric: w.fabric, colour: w.colour, leg: w.leg, seat: w.seat, size: w.size, height: w.height,
   divan: w.divan, gap: w.gap, modules: w.modules ?? [],
+  lengthCm: w.lengthCm == null ? '' : String(w.lengthCm), widthCm: w.widthCm == null ? '' : String(w.widthCm),
+  sofaCategory: w.sofaCategory ?? '', sofaFunction: w.sofaFunction ?? '',
+  photoAt: w.photoAt ?? null, photoUpload: null, photoMatch: asMatch(w.photoMatch), photoNote: w.photoNote ?? '',
   rows: (w.rows ?? []).map((r) => ({ modules: r.modules ?? [], price: r.price == null ? '' : String(r.price) })),
   showroomId: w.venueId, action: w.action as RequestAction, replaceId: w.replaceId, by: w.by, byRole: w.byRole,
   created: w.createdAt,
@@ -101,6 +123,11 @@ const priceOut = (r: ComboRow): number | null => {
 const requestBody = (d: LaunchRequest, status: RequestStatus) => ({
   type: d.type, status, supplierCode: d.supplierCode, model: d.model, fabric: d.fabric, colour: d.colour,
   leg: d.leg, seat: d.seat, size: d.size, height: d.height, divan: d.divan, gap: d.gap, modules: d.modules,
+  lengthCm: cmOf(d.lengthCm), widthCm: cmOf(d.widthCm), sofaCategory: d.sofaCategory, sofaFunction: d.sofaFunction,
+  photoMatch: d.photoMatch, photoNote: d.photoMatch === 'non_exact' ? d.photoNote.trim() : '',
+  // Only a newly picked photo travels; leaving it out keeps the saved one. A
+  // sofa's only — a mattress or bed frame form has no photo.
+  ...(d.type === 'sofa' && d.photoUpload ? { photo: d.photoUpload } : {}),
   rows: d.rows.map((r) => ({ modules: r.modules, price: priceOut(r) })),
   venueId: d.showroomId, action: d.action, replaceId: d.action === 'replace' ? d.replaceId : null,
 });
@@ -120,6 +147,7 @@ export function useMarketingState(enabled = true) {
     queryFn: async () => {
       const body = await call<{
         showrooms: ShowroomOption[]; displays: WireDisplay[]; requests: WireRequest[]; floorplans: FloorplanMeta[];
+        sofaOptions?: SofaCategoryOption[];
       }>('/state');
       return {
         showrooms: (body.showrooms ?? [])
@@ -128,7 +156,32 @@ export function useMarketingState(enabled = true) {
         displays: (body.displays ?? []).map(toDisplay),
         requests: (body.requests ?? []).map(toRequest),
         floorplans: body.floorplans ?? [],
+        sofaOptions: (body.sofaOptions ?? []).map((c) => ({
+          id: String(c.id), name: String(c.name ?? ''),
+          functions: (c.functions ?? []).map((f) => ({ id: String(f.id), name: String(f.name ?? '') })),
+        })),
       };
+    },
+  });
+}
+
+/** A launch request's photo, with how closely the coming sofa matches it. */
+export interface RequestPhoto { dataUrl: string; fileName: string; match: PhotoMatch; note: string }
+
+/** One request's photo, as a data: URL — the form's, or a display's through
+ *  the request it arrived from. `version` (the photo's upload time) keys the
+ *  cache; null fetches nothing. */
+export function useRequestPhoto(requestId: string | null, version: string | null) {
+  return useQuery<RequestPhoto | null>({
+    queryKey: ['marketing', 'request-photo', requestId, version],
+    enabled: !!requestId && !!version,
+    staleTime: Infinity,
+    queryFn: async () => {
+      const body = await call<{ photo: { dataUrl: string; fileName: string; match: string; note: string } | null }>(
+        `/requests/${encodeURIComponent(requestId!)}/photo`,
+      );
+      const p = body.photo;
+      return p ? { dataUrl: p.dataUrl, fileName: p.fileName, match: asMatch(p.match), note: p.note } : null;
     },
   });
 }
@@ -247,16 +300,48 @@ export function useArriveRequest() {
   });
 }
 
-/* ── floor plan upload prep ───────────────────────────────────────────────── */
+/** Add a sofa category (no `categoryId`), a function under one, or rename
+ *  either (`id`). Maintenance tab. */
+export function useSaveSofaOption() {
+  const done = useInvalidate();
+  return useMutation({
+    mutationFn: ({ id, categoryId, name }: { id?: string; categoryId?: string | null; name: string }) =>
+      (id
+        ? call<{ option: { id: string } }>(`/sofa-options/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+        : call<{ option: { id: string } }>('/sofa-options', { method: 'POST', body: JSON.stringify({ name, categoryId: categoryId ?? null }) })
+      ).then((r) => r.option),
+    onSuccess: done,
+  });
+}
+
+/** Take a category (with its functions) or a function off the lists. */
+export function useRemoveSofaOption() {
+  const done = useInvalidate();
+  return useMutation({
+    mutationFn: (id: string) => call<{ ok: true }>(`/sofa-options/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    onSuccess: done,
+  });
+}
+
+/* ── image upload prep ────────────────────────────────────────────────────── */
 
 /** Longest edge of a stored floor plan. A design-team layout is read on a
  *  tablet in a 360px-high frame; 2000px keeps room labels legible zoomed in
  *  while keeping the stored image well under the 3 MB server cap. */
 const PLAN_MAX_EDGE = 2000;
 
+/** Longest edge of a launch request's photo: enough to read stitching and
+ *  arm shape full-screen on a tablet, a few hundred KB as JPEG. */
+const PHOTO_MAX_EDGE = 1600;
+
 /** Downscale (never upscale) an image file and encode it for upload. PNG stays
  *  PNG (line drawings compress badly as JPEG); anything else becomes JPEG. */
-export async function prepareFloorplan(file: File): Promise<{ contentType: string; dataB64: string; fileName: string }> {
+export const prepareFloorplan = (file: File): Promise<PreparedImage> => prepareImage(file, PLAN_MAX_EDGE, true);
+
+/** The same for a photo of a sofa — always JPEG, a photo compresses well. */
+export const preparePhoto = (file: File): Promise<PreparedImage> => prepareImage(file, PHOTO_MAX_EDGE, false);
+
+async function prepareImage(file: File, maxEdge: number, keepPng: boolean): Promise<PreparedImage> {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -265,7 +350,7 @@ export async function prepareFloorplan(file: File): Promise<{ contentType: strin
       i.onerror = () => reject(new Error('This file is not an image the browser can open.'));
       i.src = url;
     });
-    const scale = Math.min(1, PLAN_MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
+    const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
     const w = Math.max(1, Math.round(img.naturalWidth * scale));
     const h = Math.max(1, Math.round(img.naturalHeight * scale));
     const canvas = document.createElement('canvas');
@@ -273,7 +358,7 @@ export async function prepareFloorplan(file: File): Promise<{ contentType: strin
     canvas.height = h;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Could not prepare the image.');
-    const contentType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+    const contentType = keepPng && file.type === 'image/png' ? 'image/png' : 'image/jpeg';
     if (contentType === 'image/jpeg') {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, w, h);

@@ -7,7 +7,7 @@ import {
   blankRequest, exportText, missingOf, RM, requestTotal, shapeName, shortDate, typeOf, type LaunchRequest,
 } from './marketing-model';
 import { useMarketingOptions } from './marketing-options';
-import { useArriveRequest, useDeleteRequest, type MarketingState } from '../../lib/marketing-api';
+import { useArriveRequest, useDeleteRequest, useRequestPhoto, type MarketingState } from '../../lib/marketing-api';
 import { SofaBlueprint } from './SofaBlueprint';
 import { LaunchRequestModal } from './LaunchRequestModal';
 import { ExportModal } from './ExportModal';
@@ -148,6 +148,10 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
   ];
 
   const exportReq = state.requests.find((r) => r.id === exporting) ?? null;
+  // The brief describes the photo; Procurement needs the picture beside it.
+  const exportPhoto = useRequestPhoto(exportReq?.type === 'sofa' ? exportReq.id : null, exportReq?.photoAt ?? null);
+  const photoName = (r: LaunchRequest, dataUrl: string) =>
+    `${(r.model || r.supplierCode || 'sofa').trim().replace(/[^\w-]+/g, '-')}-photo.${dataUrl.startsWith('data:image/png') ? 'png' : 'jpg'}`;
 
   return (
     <>
@@ -188,6 +192,7 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
           opts={opts}
           showrooms={state.showrooms}
           displays={state.displays}
+          sofaOptions={state.sofaOptions}
           onSaved={(status) => { setDraft(null); toast(status === 'completed' ? 'Moved to Completed Info' : 'Saved to Pending Info'); }}
         />
       )}
@@ -214,6 +219,7 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
             replaceItem: displayOf(exportReq.replaceId),
             moduleLabel: opts.moduleLabel,
           })}
+          photo={exportPhoto.data ? { dataUrl: exportPhoto.data.dataUrl, fileName: photoName(exportReq, exportPhoto.data.dataUrl) } : null}
           onClose={() => setExporting(null)}
         />
       )}
