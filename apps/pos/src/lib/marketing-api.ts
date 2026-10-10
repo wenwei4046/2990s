@@ -60,7 +60,7 @@ interface WireDisplay {
   photoUrl: string | null; isNew: boolean; fabric: string; colour: string; leg: string; seat: string;
   modules: string[]; size: string; height: string; divan: string; gap: string; qty: number;
   lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
-  sourceRequestId?: string | null; layout?: SofaLayout | null;
+  sourceRequestId?: string | null; photoAt?: string | null; layout?: SofaLayout | null;
 }
 
 interface WireRequest {
@@ -98,7 +98,8 @@ const toDisplay = (w: WireDisplay): DisplayItem => ({
   photoUrl: w.photoUrl, isNew: w.isNew, fabric: w.fabric, colour: w.colour, leg: w.leg, seat: w.seat,
   modules: w.modules ?? [], size: w.size, height: w.height, divan: w.divan, gap: w.gap, qty: w.qty || 1,
   lengthCm: w.lengthCm ?? null, widthCm: w.widthCm ?? null, sofaCategory: w.sofaCategory ?? '',
-  sofaFunction: w.sofaFunction ?? '', sourceRequestId: w.sourceRequestId ?? null, layout: w.layout ?? null,
+  sofaFunction: w.sofaFunction ?? '', sourceRequestId: w.sourceRequestId ?? null, photoAt: w.photoAt ?? null,
+  layout: w.layout ?? null,
 });
 
 const toRequest = (w: WireRequest): LaunchRequest => ({

@@ -470,7 +470,12 @@ venue each Houzs order was placed at.
   the server sets NEW (`is_new` is derived from `sourceRequestId`, never
   sent). So **several displays can point at one request** — don't treat it as
   one-to-one. A copied request gets its own copy of the photo (re-uploaded),
-  so deleting the source request takes nothing from the copy.
+  so deleting the source request takes nothing from the copy. The board's
+  request cards and a sofa's floor card show that photo **beside** the layout
+  (owner 2026-10-10): `/state` gives each sofa display `photoAt` (its
+  request's photo time; one batched read for requests that have arrived), and
+  `RequestPhotoTile` reads the image only when the card nears the screen —
+  the images themselves still never ride on `/state`.
 - 🔑 **The Marketing "Build components" canvas IS the POS Custom build** —
   `pages/CustomBuilder.tsx` with its `layoutOnly` prop (owner 2026-10-09:
   "same as the original space planning — can rotate and edit"). Same drag /

@@ -64,6 +64,9 @@ export interface DisplayItem {
   sofaFunction: string;
   /** The launch request it arrived from — its photo is read through it. */
   sourceRequestId: string | null;
+  /** That request's photo version (when it was uploaded); null when there is
+   *  no photo — a sofa card shows it beside the layout (owner 2026-10-10). */
+  photoAt: string | null;
   /** How the sofa is laid out (0220); null when recorded before the canvas. */
   layout: SofaLayout | null;
 }
@@ -415,13 +418,14 @@ export function requestFieldsFrom(src: DuplicateSource): Partial<LaunchRequest> 
 
 /** The request whose photo a source shows, if any, and the version that keys
  *  its cache: a request's own, or — for a piece on display — the request it
- *  came from (read as the display drawer reads it). */
+ *  came from. */
 export function photoSourceOf(src: DuplicateSource): { requestId: string; version: string } | null {
   if (src.kind === 'request') {
     const r = src.request;
     return r.id && r.photoAt ? { requestId: r.id, version: r.photoAt } : null;
   }
-  return src.item.sourceRequestId ? { requestId: src.item.sourceRequestId, version: 'arrived' } : null;
+  const x = src.item;
+  return x.sourceRequestId && x.photoAt ? { requestId: x.sourceRequestId, version: x.photoAt } : null;
 }
 
 /** A source as Add on display records it. One that is not a catalogue piece

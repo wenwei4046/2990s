@@ -8,7 +8,7 @@ import {
 const item = (over: Partial<DisplayItem>): DisplayItem => ({
   id: 'd1', venueId: '107', type: 'sofa', modelId: null, name: 'AM9036', code: 'SOFA AM9036', photoUrl: null, isNew: false,
   fabric: '', colour: '', leg: '', seat: '', modules: [], size: '', height: '', divan: '', gap: '', qty: 1,
-  lengthCm: null, widthCm: null, sofaCategory: '', sofaFunction: '', sourceRequestId: null, layout: null, ...over,
+  lengthCm: null, widthCm: null, sofaCategory: '', sofaFunction: '', sourceRequestId: null, photoAt: null, layout: null, ...over,
 });
 
 /** Everything a sofa needs to be saved (owner 2026-10-09), and nothing more. */
@@ -232,7 +232,10 @@ describe('duplicate', () => {
   it('finds the photo a source shows', () => {
     expect(photoSourceOf({ kind: 'request', request: pending })).toEqual({ requestId: 'r1', version: '2026-10-09T03:00:00.000Z' });
     expect(photoSourceOf({ kind: 'request', request: { ...pending, photoAt: null } })).toBeNull();
-    expect(photoSourceOf({ kind: 'display', item: item({ sourceRequestId: 'r0' }) })).toEqual({ requestId: 'r0', version: 'arrived' });
+    expect(photoSourceOf({ kind: 'display', item: item({ sourceRequestId: 'r0', photoAt: '2026-10-08T09:00:00.000Z' }) }))
+      .toEqual({ requestId: 'r0', version: '2026-10-08T09:00:00.000Z' });
+    // A request with no photo is not asked for one.
+    expect(photoSourceOf({ kind: 'display', item: item({ sourceRequestId: 'r0' }) })).toBeNull();
     expect(photoSourceOf({ kind: 'display', item: item({}) })).toBeNull();
   });
 
