@@ -4,22 +4,32 @@
 // (owner 2026-10-09) — those carry a Required tag while empty. Everything
 // else can be filled later. When editing an existing request, every other
 // empty field carries a TO FILL tag, and Complete needs them all.
+//
+// ⋯ › Duplicate from… (owner 2026-10-10) fills it from another request on the
+// board — however much of it is filled in — or from a piece on display: one
+// new model going to three showrooms is three requests, the second and third
+// copies of the first.
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { ImageUp, Pencil, Upload, X } from 'lucide-react';
 import {
-  cmOf, compLine, hasPhoto, missingOf, RM, requestTotal, saveBlockersOf, saveMissingOf, seatDepth, shapeName, specOf, TYPES,
-  type DisplayItem, type LaunchRequest, type RequestStatus, type RequestType,
+  cmOf, compLine, hasPhoto, missingOf, photoSourceOf, preparedFromDataUrl, requestFieldsFrom, RM, requestTotal,
+  saveBlockersOf, saveMissingOf, seatDepth, shapeName, specOf, TYPES,
+  type DisplayItem, type DuplicateSource, type LaunchRequest, type RequestStatus, type RequestType,
 } from './marketing-model';
 import { coloursOf, withValue, type MarketingOptions } from './marketing-options';
 import {
-  preparePhoto, useRequestPhoto, useSaveRequest, type ShowroomOption, type SofaCategoryOption,
+  preparePhoto, useFetchRequestPhoto, useRequestPhoto, useSaveRequest, type ShowroomOption, type SofaCategoryOption,
 } from '../../lib/marketing-api';
 import { ComponentBuilder, type BuiltSofa } from './ComponentBuilder';
+import { DuplicateFrom, FormMoreMenu } from './DuplicateFrom';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
 import s from './marketing.module.css';
 
 type BuilderTarget = { target: 'draft' } | { target: 'combo'; idx: number };
+
+/** What a launch request can be — no accessory. */
+const REQUEST_TYPES = TYPES.filter((t) => t.id !== 'accessory').map((t) => t.id);
 
 const ToFill = ({ on }: { on: boolean }) => (on ? <span className={s.toFillTag}>TO FILL</span> : null);
 /** Needed even to save — shown while the field is empty, on a new request too. */
@@ -27,12 +37,14 @@ const Req = ({ on }: { on: boolean }) => (on ? <span className={s.reqTag}>Requir
 const empty = (v: unknown) => !String(v ?? '').trim();
 const bg = (url: string | null) => (url ? { backgroundImage: `url("${url}")` } : undefined);
 
-export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displays, sofaOptions, onSaved }: {
+export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displays, requests, sofaOptions, onSaved }: {
   draft: LaunchRequest;
   setDraft: (d: LaunchRequest | null) => void;
   opts: MarketingOptions;
   showrooms: ShowroomOption[];
   displays: DisplayItem[];
+  /** The launch board — what Duplicate can copy, with every floor's pieces. */
+  requests: LaunchRequest[];
   /** Category → Function lists, kept in Marketing → ⋯ → Maintenance. */
   sofaOptions: SofaCategoryOption[];
   onSaved: (status: RequestStatus) => void;
@@ -41,7 +53,9 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
   const [builder, setBuilder] = useState<BuilderTarget | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [viewing, setViewing] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
   const save = useSaveRequest();
+  const fetchPhoto = useFetchRequestPhoto();
   // The saved photo, when this form has not picked a new one.
   const saved = useRequestPhoto(d.photoUpload ? null : d.id, d.photoUpload ? null : d.photoAt);
   const photoSrc = d.photoUpload
@@ -136,6 +150,33 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
     }
   };
 
+  /** Duplicate: the source's product into this form. Its photo is read first
+   *  and goes with this request as its own upload; if it cannot be read, the
+   *  rest is still copied and the form says so. Closing the picker while the
+   *  photo is on its way cancels the copy (`dupRun`). */
+  const dupRun = useRef(0);
+  const closeDuplicate = () => { dupRun.current += 1; setDuplicating(false); };
+  const duplicate = async (src: DuplicateSource) => {
+    const run = dupRun.current;
+    const fields = requestFieldsFrom(src);
+    const from = (fields.type ?? latest.current.type) === 'sofa' ? photoSourceOf(src) : null;
+    let photo: Partial<LaunchRequest> = {};
+    let photoErr = '';
+    if (from) {
+      try {
+        const p = await fetchPhoto(from.requestId, from.version);
+        const img = p ? preparedFromDataUrl(p.dataUrl, p.fileName) : null;
+        if (p && img) photo = { photoUpload: img, photoMatch: p.match, photoNote: p.note };
+      } catch (x) {
+        photoErr = `Copied, except the photo — ${(x as Error).message}. Upload it here.`;
+      }
+    }
+    if (!open.current || run !== dupRun.current) return;
+    patch({ ...fields, ...photo });
+    setDuplicating(false);
+    if (photoErr) setErr(photoErr);
+  };
+
   const saveBuilt = ({ layout, modules }: BuiltSofa) => {
     if (!builder) return;
     if (builder.target === 'combo') {
@@ -175,6 +216,7 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                     {t.label}
                   </button>
                 ))}
+                <FormMoreMenu onDuplicate={() => setDuplicating(true)} />
               </div>
 
               <div className={`${s.destBox} ${d.showroomId && d.action ? '' : s.destBoxNeeds}`}>
@@ -547,6 +589,20 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
           onLeg={(v) => patch({ leg: v })}
           onCancel={() => setBuilder(null)}
           onSave={saveBuilt}
+        />
+      )}
+
+      {duplicating && (
+        <DuplicateFrom
+          displays={displays}
+          requests={requests}
+          showrooms={showrooms}
+          types={REQUEST_TYPES}
+          initialTab="launch"
+          exceptRequestId={d.id}
+          opts={opts}
+          onPick={duplicate}
+          onClose={closeDuplicate}
         />
       )}
 

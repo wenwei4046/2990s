@@ -368,6 +368,117 @@ export const saveBlockersOf = (r: LaunchRequest): string[] =>
 export const requestTotal = (r: Pick<LaunchRequest, 'rows'>): number =>
   r.rows.reduce((a, x) => a + (Number(x.price) || 0), 0);
 
+/* ── Duplicate (owner 2026-10-10) ──────────────────────────────────────────
+   ⋯ › Duplicate from… fills a form from a piece on a showroom floor or a
+   product on the launch board (not on any floor yet) — one new model going
+   to three showrooms is three requests, and the second and third are copies
+   of the first, however much of it is filled in. A copy takes the product,
+   never where it goes: showroom and Add / Replace stay as the form has them.
+   Whatever the source does not have stays as the form has it too — a piece
+   on display has no price list, and no supplier code unless it came from the
+   launch board (a catalogue piece's code is the catalogue's). */
+
+export type DuplicateSource =
+  | { kind: 'display'; item: DisplayItem }
+  | { kind: 'request'; request: LaunchRequest };
+
+const copyLayout = (l: SofaLayout | null | undefined): SofaLayout | null => (l ? l.map((c) => ({ ...c })) : null);
+const cmText = (n: number | null): string => (n == null ? '' : String(n));
+
+/** The fields a launch request form takes from a source. The photo is not
+ *  among them: it is read on its own (it is not on the wire), then sent again
+ *  as the new request's own upload. */
+export function requestFieldsFrom(src: DuplicateSource): Partial<LaunchRequest> {
+  if (src.kind === 'request') {
+    const r = src.request;
+    return {
+      type: r.type, supplierCode: r.supplierCode, model: r.model, fabric: r.fabric, colour: r.colour, leg: r.leg,
+      seat: r.seat, size: r.size, height: r.height, divan: r.divan, gap: r.gap, modules: [...r.modules],
+      layout: copyLayout(r.layout), lengthCm: r.lengthCm, widthCm: r.widthCm, sofaCategory: r.sofaCategory,
+      sofaFunction: r.sofaFunction,
+      rows: r.rows.map((x) => ({ modules: [...x.modules], price: x.price, layout: copyLayout(x.layout) })),
+    };
+  }
+  const x = src.item;
+  if (x.type === 'accessory') return {};
+  return {
+    type: x.type, model: x.name, fabric: x.fabric, colour: x.colour, leg: x.leg, seat: x.seat, size: x.size,
+    height: x.height, divan: x.divan, gap: x.gap, modules: [...x.modules], layout: copyLayout(x.layout),
+    // A piece from the launch board carries what its request said (Arrive
+    // copied it); a catalogue piece never had these.
+    ...(x.sourceRequestId ? {
+      supplierCode: x.code, lengthCm: cmText(x.lengthCm), widthCm: cmText(x.widthCm),
+      sofaCategory: x.sofaCategory, sofaFunction: x.sofaFunction,
+    } : {}),
+  };
+}
+
+/** The request whose photo a source shows, if any, and the version that keys
+ *  its cache: a request's own, or — for a piece on display — the request it
+ *  came from (read as the display drawer reads it). */
+export function photoSourceOf(src: DuplicateSource): { requestId: string; version: string } | null {
+  if (src.kind === 'request') {
+    const r = src.request;
+    return r.id && r.photoAt ? { requestId: r.id, version: r.photoAt } : null;
+  }
+  return src.item.sourceRequestId ? { requestId: src.item.sourceRequestId, version: 'arrived' } : null;
+}
+
+/** A source as Add on display records it. One that is not a catalogue piece
+ *  — a new product from the launch board — keeps its own name and code
+ *  (`modelId` null), and the request it came from. */
+export interface DisplayCopy {
+  type: DisplayType;
+  modelId: string | null;
+  name: string;
+  code: string;
+  photoUrl: string | null;
+  fabric: string;
+  colour: string;
+  leg: string;
+  seat: string;
+  size: string;
+  height: string;
+  divan: string;
+  gap: string;
+  modules: string[];
+  layout: SofaLayout | null;
+  qty: number;
+  lengthCm: number | null;
+  widthCm: number | null;
+  sofaCategory: string;
+  sofaFunction: string;
+  sourceRequestId: string | null;
+}
+
+export function displayCopyFrom(src: DuplicateSource): DisplayCopy {
+  if (src.kind === 'display') {
+    const x = src.item;
+    return {
+      type: x.type, modelId: x.modelId, name: x.name, code: x.code, photoUrl: x.photoUrl, fabric: x.fabric,
+      colour: x.colour, leg: x.leg, seat: x.seat, size: x.size, height: x.height, divan: x.divan, gap: x.gap,
+      modules: [...x.modules], layout: copyLayout(x.layout), qty: x.qty || 1, lengthCm: x.lengthCm, widthCm: x.widthCm,
+      sofaCategory: x.sofaCategory, sofaFunction: x.sofaFunction, sourceRequestId: x.sourceRequestId,
+    };
+  }
+  const r = src.request;
+  return {
+    // The name Arrive would give it; a request may not have one yet.
+    type: r.type, modelId: null, name: r.model.trim() || `Untitled ${typeOf(r.type).label.toLowerCase()}`,
+    code: r.supplierCode, photoUrl: null, fabric: r.fabric, colour: r.colour, leg: r.leg, seat: r.seat, size: r.size,
+    height: r.height, divan: r.divan, gap: r.gap, modules: [...r.modules], layout: copyLayout(r.layout), qty: 1,
+    lengthCm: cmOf(r.lengthCm), widthCm: cmOf(r.widthCm), sofaCategory: r.sofaCategory, sofaFunction: r.sofaFunction,
+    sourceRequestId: r.id,
+  };
+}
+
+/** A saved photo read back (a data: URL), in the shape a form uploads; null
+ *  when it is not an image the API takes. */
+export function preparedFromDataUrl(dataUrl: string, fileName: string): PreparedImage | null {
+  const m = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+=*)$/.exec(dataUrl);
+  return m ? { contentType: m[1]!, dataB64: m[2]!, fileName } : null;
+}
+
 export interface ExportContext {
   showroomName: string | null;
   replaceItem: DisplayItem | null;

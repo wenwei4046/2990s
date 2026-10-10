@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  blankRequest, cmOf, detailRows, exportText, inch, missingOf, RM, saveBlockersOf, saveMissingOf, shapeName, sizeText,
-  specOf, tagsOf, type DisplayItem, type LaunchRequest,
+  blankRequest, cmOf, detailRows, displayCopyFrom, exportText, inch, missingOf, photoSourceOf, preparedFromDataUrl,
+  requestFieldsFrom, RM, saveBlockersOf, saveMissingOf, shapeName, sizeText, specOf, tagsOf, type DisplayItem,
+  type LaunchRequest,
 } from './marketing-model';
 
 const item = (over: Partial<DisplayItem>): DisplayItem => ({
@@ -178,6 +179,81 @@ describe('a display that arrived with size, category and function', () => {
       { k: 'Size', v: '220 × 95 cm' }, { k: 'Category', v: 'Seater' }, { k: 'Function', v: 'Push back' },
     ]);
     expect(detailRows(item({})).map((r) => r.k)).toEqual(['Layout', 'Seat', 'Fabric series', 'Colour', 'Leg height']);
+  });
+});
+
+/* Owner 2026-10-10: ⋯ › Duplicate from… — one new model to three showrooms. */
+describe('duplicate', () => {
+  const LAYOUT = [{ id: 'c1', moduleId: '2A(LHF)', x: 152.5, y: 192.5, rot: 0 as const }];
+  /** A pending sofa on the launch board — not everything filled in. */
+  const pending: LaunchRequest = {
+    ...blankRequest('Management', 'Staff'), id: 'r1', supplierCode: 'SL-2207', fabric: 'Velvet VL', modules: ['2A(LHF)', 'L(RHF)'],
+    layout: LAYOUT, lengthCm: '280', widthCm: '160', sofaCategory: 'Seater', sofaFunction: 'Push back',
+    photoAt: '2026-10-09T03:00:00.000Z', photoMatch: 'non_exact', photoNote: 'Slimmer arms',
+    rows: [{ modules: ['2A(LHF)', 'L(RHF)'], price: '3540', layout: LAYOUT }],
+    showroomId: 'flagship', action: 'replace', replaceId: 'd9', created: '2026-10-09T03:00:00.000Z',
+  };
+
+  it('copies a request’s product — blanks included — and never where it goes', () => {
+    const f = requestFieldsFrom({ kind: 'request', request: pending });
+    expect(f).toMatchObject({
+      type: 'sofa', supplierCode: 'SL-2207', model: '', fabric: 'Velvet VL', colour: '', modules: ['2A(LHF)', 'L(RHF)'],
+      layout: LAYOUT, lengthCm: '280', widthCm: '160', sofaCategory: 'Seater', sofaFunction: 'Push back',
+      rows: [{ modules: ['2A(LHF)', 'L(RHF)'], price: '3540', layout: LAYOUT }],
+    });
+    for (const k of ['id', 'status', 'showroomId', 'action', 'replaceId', 'by', 'byRole', 'created', 'photoAt', 'photoUpload'] as const) {
+      expect(f).not.toHaveProperty(k);
+    }
+  });
+
+  it('hands over copies, so editing the new form never edits the source', () => {
+    const f = requestFieldsFrom({ kind: 'request', request: pending });
+    f.modules!.push('1NA');
+    f.layout![0]!.x = 0;
+    f.rows![0]!.modules.push('1NA');
+    expect(pending.modules).toEqual(['2A(LHF)', 'L(RHF)']);
+    expect(pending.layout![0]!.x).toBe(152.5);
+    expect(pending.rows[0]!.modules).toEqual(['2A(LHF)', 'L(RHF)']);
+  });
+
+  it('takes a supplier code and the sofa spec only from a piece that came off the launch board', () => {
+    const catalogue = item({ name: 'Annsa', code: 'SOFA ANNSA', fabric: 'CG', colour: 'Pearl', seat: '28"', modules: ['1A(LHF)', '2A(RHF)'] });
+    const f = requestFieldsFrom({ kind: 'display', item: catalogue });
+    expect(f).toMatchObject({ type: 'sofa', model: 'Annsa', fabric: 'CG', colour: 'Pearl', seat: '28"', modules: ['1A(LHF)', '2A(RHF)'] });
+    for (const k of ['supplierCode', 'lengthCm', 'sofaCategory', 'rows'] as const) expect(f).not.toHaveProperty(k);
+
+    const arrived = item({ name: 'Booqit', code: 'SL-2207', lengthCm: 280, widthCm: 160, sofaCategory: 'Seater', sofaFunction: 'Fixed', sourceRequestId: 'r0' });
+    expect(requestFieldsFrom({ kind: 'display', item: arrived })).toMatchObject({
+      model: 'Booqit', supplierCode: 'SL-2207', lengthCm: '280', widthCm: '160', sofaCategory: 'Seater', sofaFunction: 'Fixed',
+    });
+    expect(requestFieldsFrom({ kind: 'display', item: item({ type: 'accessory' }) })).toEqual({});
+  });
+
+  it('finds the photo a source shows', () => {
+    expect(photoSourceOf({ kind: 'request', request: pending })).toEqual({ requestId: 'r1', version: '2026-10-09T03:00:00.000Z' });
+    expect(photoSourceOf({ kind: 'request', request: { ...pending, photoAt: null } })).toBeNull();
+    expect(photoSourceOf({ kind: 'display', item: item({ sourceRequestId: 'r0' }) })).toEqual({ requestId: 'r0', version: 'arrived' });
+    expect(photoSourceOf({ kind: 'display', item: item({}) })).toBeNull();
+  });
+
+  it('records a request on display as the new product it is', () => {
+    const c = displayCopyFrom({ kind: 'request', request: pending });
+    expect(c).toMatchObject({
+      type: 'sofa', modelId: null, name: 'Untitled sofa', code: 'SL-2207', lengthCm: 280, widthCm: 160,
+      sofaCategory: 'Seater', sofaFunction: 'Push back', sourceRequestId: 'r1', qty: 1,
+    });
+    expect(displayCopyFrom({ kind: 'request', request: { ...pending, model: ' Booqit ' } }).name).toBe('Booqit');
+  });
+
+  it('copies a piece on display as it is, catalogue Model and all', () => {
+    const c = displayCopyFrom({ kind: 'display', item: item({ type: 'mattress', modelId: 'm7', name: 'AKKA-FIRM', code: '2990 AKKA-FIRM MATT', photoUrl: '/a.jpg', size: 'King', height: '12' }) });
+    expect(c).toMatchObject({ type: 'mattress', modelId: 'm7', name: 'AKKA-FIRM', code: '2990 AKKA-FIRM MATT', photoUrl: '/a.jpg', size: 'King', height: '12', sourceRequestId: null });
+  });
+
+  it('reads a saved photo back into an upload', () => {
+    expect(preparedFromDataUrl('data:image/jpeg;base64,/9j/AAAA', 'sofa.jpg')).toEqual({ contentType: 'image/jpeg', dataB64: '/9j/AAAA', fileName: 'sofa.jpg' });
+    expect(preparedFromDataUrl('data:image/gif;base64,R0lGOD', 'a.gif')).toBeNull();
+    expect(preparedFromDataUrl('https://example.com/a.jpg', 'a.jpg')).toBeNull();
   });
 });
 

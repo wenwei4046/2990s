@@ -192,6 +192,7 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
           opts={opts}
           showrooms={state.showrooms}
           displays={state.displays}
+          requests={state.requests}
           sofaOptions={state.sofaOptions}
           onSaved={(status) => { setDraft(null); toast(status === 'completed' ? 'Moved to Completed Info' : 'Saved to Pending Info'); }}
         />
