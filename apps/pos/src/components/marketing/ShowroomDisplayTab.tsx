@@ -395,6 +395,9 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
         <AddDisplayModal
           showroom={showroom}
           opts={opts}
+          displays={state.displays}
+          requests={state.requests}
+          showrooms={showrooms}
           onClose={() => setAddOpen(false)}
           onAdded={(name) => { setAddOpen(false); toast(`${name} added to ${showroom.name}`); }}
         />

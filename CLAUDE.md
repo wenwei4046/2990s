@@ -450,7 +450,7 @@ keeps the option lists that have no SKU Master source.
 | Piece | Home | Why |
 |---|---|---|
 | Displays, floor plans, launch requests | **2990's Supabase** (migrations `0217`, `0219`, `0220`), via `apps/api/src/routes/marketing.ts` | Houzs has no such tables and we can't add them |
-| Sofa Category → Function lists | **2990's Supabase** `marketing_sofa_options` (migration `0219`) — kept in ⋯ › Maintenance | owner 2026-10-09: fabric, leg and seat come from the SKU Master; these have no source, so Marketing keeps them. A request stores the NAME, so renaming or removing an option never changes a saved request |
+| Sofa Category → Function lists | **2990's Supabase** `marketing_sofa_options` (migration `0219`) — kept in ⋯ › Maintenance, one category at a time: its name and every function under it in one dialog, saved in one transaction (`marketing_save_sofa_category`, migration `0221`, owner 2026-10-10) | owner 2026-10-09: fabric, leg and seat come from the SKU Master; these have no source, so Marketing keeps them. A request stores the NAME, so renaming or removing an option never changes a saved request |
 | Sales lines | **Houzs** `GET /api/scm/sales-analysis/lines` (their `scm/lib/sales-lines.ts`) | the orders live there |
 | Showroom list | **2990's Supabase** `marketing_showrooms` (migration `0218`) — added, renamed and removed in the Showroom display tab | owner 2026-10-09: it is a record of what is on each floor, not the order form's branch list. Until 0218 it was Houzs `/venues`; `venue_id` kept its name but is now a FK to this table |
 
@@ -459,7 +459,18 @@ piece on display or an open launch request** (the dialog says so before the
 server does). Sales analysis does not use this list: its showroom filter is the
 venue each Houzs order was placed at.
 
-**Nine things that will bite you:**
+**Ten things that will bite you:**
+- 🔑 **`source_request_id` on a display no longer means "Arrive made it".**
+  ⋯ › Duplicate from… (owner 2026-10-10, both the New product and the Add on
+  display forms) fills a form from a piece on display or a launch request —
+  the use is one new model to three showrooms: three requests, the second and
+  third copies of the first, however incomplete. A copy takes the product,
+  never the destination (showroom, Add / Replace). A display copied from a new
+  product carries the request it came from, so the drawer shows that photo and
+  the server sets NEW (`is_new` is derived from `sourceRequestId`, never
+  sent). So **several displays can point at one request** — don't treat it as
+  one-to-one. A copied request gets its own copy of the photo (re-uploaded),
+  so deleting the source request takes nothing from the copy.
 - 🔑 **The Marketing "Build components" canvas IS the POS Custom build** —
   `pages/CustomBuilder.tsx` with its `layoutOnly` prop (owner 2026-10-09:
   "same as the original space planning — can rotate and edit"). Same drag /

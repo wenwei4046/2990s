@@ -5,7 +5,7 @@
 // form offers.
 //
 // Owner 2026-10-08 ("Marketing 展厅陈列系统"). The POS screens are
-// apps/pos/src/pages/Marketing.tsx; the tables are migrations 0217–0219.
+// apps/pos/src/pages/Marketing.tsx; the tables are migrations 0217–0221.
 // The showroom list is the POS's own since 0218 (owner 2026-10-09: a record,
 // not Houzs's venue master), so every write that files something under a
 // showroom first checks that showroom is still listed.
@@ -15,6 +15,12 @@
 // photo, category and function. The POS form says so before it sends;
 // `saveGaps` below is the same rule for anything that skips the form (an old
 // cached POS bundle included).
+//
+// Duplicate (owner 2026-10-10) fills a form from a piece on display or a
+// launch request. A copied request is saved like any other — its photo sent
+// again, as a new upload, so each request keeps its own. A display copied from
+// a new product names the request it came from (`sourceRequestId`), as Arrive
+// does, which is what shows its photo and its NEW pill.
 //
 // ── AUTHORIZATION ───────────────────────────────────────────────────────────
 // The caller is a POS tablet holding a HOUZS session, so — exactly like
@@ -228,6 +234,15 @@ const displayCreateSchema = z.object({
   divan: short.optional().default(''),
   gap: short.optional().default(''),
   qty: z.number().int().min(1).max(999).optional().default(1),
+  // A copy of a new product (Duplicate, owner 2026-10-10) brings what Arrive
+  // would have: its size, category and function, and the launch request it
+  // came from — the drawer reads the photo through it. Absent on an ordinary
+  // Add on display.
+  lengthCm: cm.nullable().optional().default(null),
+  widthCm: cm.nullable().optional().default(null),
+  sofaCategory: short.optional().default(''),
+  sofaFunction: short.optional().default(''),
+  sourceRequestId: z.string().regex(UUID_RE).nullable().optional().default(null),
 }).superRefine((v, ctx) => {
   // A sofa on the floor is its compartments; one with none is not a display.
   if (v.type === 'sofa' && v.modules.length === 0) {
@@ -602,6 +617,18 @@ marketing.post('/displays', async (c) => {
   const sb = admin(c);
   const unlisted = await listedShowroom(c, sb, v.venueId);
   if (unlisted) return unlisted;
+  if (v.sourceRequestId) {
+    const { data: src, error: srcErr } = await sb
+      .from('marketing_launch_requests')
+      .select('id, type')
+      .eq('id', v.sourceRequestId)
+      .maybeSingle();
+    if (srcErr) return c.json({ error: 'fetch_failed', reason: srcErr.message }, 500);
+    if ((src as { type?: string } | null)?.type !== v.type) {
+      return c.json({ error: 'unknown_request', reason: 'The launch request this is copied from is not on record.' }, 409);
+    }
+  }
+  const isSofa = v.type === 'sofa';
   const { data, error } = await sb
     .from('marketing_displays')
     .insert({
@@ -611,18 +638,26 @@ marketing.post('/displays', async (c) => {
       name: v.name,
       code: v.code,
       photo_url: v.photoUrl ?? null,
-      is_new: false,
+      // NEW marks a product from the launch board: Arrive sets it, and so does
+      // a copy that names the request it came from. Derived, never sent.
+      is_new: v.sourceRequestId != null,
       fabric: v.fabric,
       colour: v.colour,
       leg: v.leg,
       seat: v.seat,
       modules: v.modules,
-      layout: v.type === 'sofa' ? v.layout : null,
+      layout: isSofa ? v.layout : null,
       size: v.size,
       height: v.height,
       divan: v.divan,
       gap: v.gap,
       qty: v.qty,
+      // Sofa only, as on the request (0219).
+      length_cm: isSofa ? v.lengthCm : null,
+      width_cm: isSofa ? v.widthCm : null,
+      sofa_category: isSofa ? v.sofaCategory : '',
+      sofa_function: isSofa ? v.sofaFunction : '',
+      source_request_id: v.sourceRequestId,
       created_by: String(g.caller.userId),
       created_by_name: g.caller.name,
     })
@@ -986,3 +1021,71 @@ marketing.delete('/sofa-options/:id', async (c) => {
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   return c.json({ ok: true });
 });
+
+/* ── Maintenance: a whole category at once (0221) ────────────────────────────
+   Owner 2026-10-10: the category's edit button edits its functions too —
+   rename, remove, add — and Save sends the whole list. One transaction
+   (marketing_save_sofa_category), so a list is never left half-saved. The
+   one-option routes above stay for a POS bundle cached from before. */
+
+const categorySaveSchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  // The list as the dialog shows it, top to bottom: an id keeps (or renames)
+  // that function, no id adds one; a function left out is taken off.
+  functions: z.array(z.object({
+    id: z.string().regex(UUID_RE).optional(),
+    name: z.string().trim().min(1).max(60),
+  })).max(40),
+});
+
+async function saveCategory(c: Ctx, id: string | null): Promise<Response> {
+  const g = await gate(c);
+  if (!g.ok) return g.res;
+  if (id !== null && !UUID_RE.test(id)) return c.json({ error: 'not_found' }, 404);
+  const b = await readBody(c);
+  if (!b.ok) return b.res;
+  const parsed = categorySaveSchema.safeParse(b.body);
+  if (!parsed.success) return c.json({ error: 'validation_failed', issues: issues(parsed.error) }, 400);
+  const { name, functions } = parsed.data;
+  const names = functions.map((f) => f.name.toLowerCase());
+  const twice = functions.find((f, i) => names.indexOf(f.name.toLowerCase()) !== i);
+  if (twice) return c.json({ error: 'duplicate_name', reason: `${twice.name} is on the list twice.` }, 400);
+  const sb = admin(c);
+  const { data, error } = await sb.rpc('marketing_save_sofa_category', {
+    p_category_id: id,
+    p_name: name,
+    p_functions: functions.map((f) => (f.id ? { id: f.id, name: f.name } : { name: f.name })),
+    p_by: String(g.caller.userId),
+    p_by_name: g.caller.name,
+  });
+  if (error) {
+    const m = error.message;
+    if (/category_not_found/.test(m)) return c.json({ error: 'not_found', reason: 'This category is no longer on the list.' }, 404);
+    if (/function_not_found/.test(m)) {
+      return c.json({ error: 'list_changed', reason: 'Someone else changed this list meanwhile. Close it and open it again.' }, 409);
+    }
+    if (/duplicate_category/.test(m)) return c.json({ error: 'duplicate_name', reason: `There is already a category called ${name}.` }, 409);
+    if (/duplicate_function/.test(m) || isDuplicate(error)) {
+      return c.json({ error: 'duplicate_name', reason: 'A name on this list is already taken. Close it and open it again.' }, 409);
+    }
+    return c.json({ error: 'save_failed', reason: m }, 500);
+  }
+  const saved = String(data ?? '');
+  if (!UUID_RE.test(saved)) return c.json({ error: 'save_failed', reason: 'The category was not saved.' }, 500);
+  // Read it back as /state lists it. `saved` is a checked UUID, safe in the filter.
+  const { data: rows, error: readErr } = await sb
+    .from('marketing_sofa_options')
+    .select(OPTION_SELECT)
+    .is('archived_at', null)
+    .or(`id.eq.${saved},parent_id.eq.${saved}`)
+    .order('seq', { ascending: true });
+  if (readErr) return c.json({ error: 'fetch_failed', reason: readErr.message }, 500);
+  const category = optionsToWire((rows ?? []) as unknown as Record<string, unknown>[])[0] ?? { id: saved, name, functions: [] };
+  return c.json({ category }, id === null ? 201 : 200);
+}
+
+/** Add a category with its functions. */
+marketing.post('/sofa-categories', (c) => saveCategory(c, null));
+
+/** Save a category's name and its whole function list. */
+marketing.put('/sofa-categories/:id', (c) => saveCategory(c, c.req.param('id')));

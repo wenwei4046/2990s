@@ -1,18 +1,36 @@
 // Add on display — record a piece on a showroom floor, with the same options a
 // Sales Order line offers (design screens 04 and 06). A sofa is built first
 // (Step 1 · Components), then its Model, fabric, colour, leg and seat.
+//
+// ⋯ › Duplicate from… (owner 2026-10-10) fills it from a piece on any floor,
+// or from a product on the launch board. A new product is not in the
+// catalogue, so its copy keeps its own name and code — its own tile, ahead of
+// the catalogue's — and the launch request it came from, which brings its
+// photo and NEW pill, as Arrive would.
 
 import { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
-import { compLine, seatDepth, shapeName, sizeName, specOf, TYPES, type DisplayType, type SofaLayout } from './marketing-model';
 import {
-  allowedOr, coloursOf, fabricsFor, preferred,
+  compLine, displayCopyFrom, seatDepth, shapeName, sizeName, specOf, TYPES,
+  type DisplayCopy, type DisplayItem, type DisplayType, type DuplicateSource, type LaunchRequest, type SofaLayout,
+} from './marketing-model';
+import {
+  allowedOr, coloursOf, fabricsFor, preferred, withValue,
   type MarketingOptions, type ModelOption,
 } from './marketing-options';
 import { useAddDisplay, type ShowroomOption } from '../../lib/marketing-api';
 import { ComponentBuilder } from './ComponentBuilder';
+import { DuplicateFrom, FormMoreMenu } from './DuplicateFrom';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
 import s from './marketing.module.css';
+
+/** A copied piece the catalogue cannot name — a new product from the launch
+ *  board, or a Model since taken out of the catalogue: its own name and code,
+ *  and what Arrive carries with a new product. */
+type CopiedProduct = Pick<
+  DisplayCopy,
+  'modelId' | 'name' | 'code' | 'photoUrl' | 'lengthCm' | 'widthCm' | 'sofaCategory' | 'sofaFunction' | 'sourceRequestId'
+>;
 
 interface AddState {
   type: DisplayType;
@@ -29,6 +47,8 @@ interface AddState {
   /** The sofa as laid out on the canvas (0220). */
   layout: SofaLayout | null;
   qty: number;
+  /** A copy's own product — the one picked while no catalogue Model is. */
+  product: CopiedProduct | null;
 }
 
 /** The option lists for one type + Model — the Sales Order line's rule: the
@@ -57,28 +77,60 @@ function freshAdd(opts: MarketingOptions, type: DisplayType): AddState {
   return {
     type, modelId: model?.id ?? '', size: preferred(l.sizes, 'Queen'), height: '',
     fabric, colour: l.coloursOf(fabric)[0] ?? '', leg: preferred(l.legs, '4"'), seat: preferred(l.seats, '28"'),
-    divan: preferred(l.divans, '10"'), gap: '', modules: [], layout: null, qty: 1,
+    divan: preferred(l.divans, '10"'), gap: '', modules: [], layout: null, qty: 1, product: null,
   };
 }
 
-export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
+/** A source as this form takes it: a catalogue piece picks its Model; any
+ *  other keeps its own name and code. */
+function copiedAdd(opts: MarketingOptions, c: DisplayCopy): AddState {
+  const inCatalogue = !!c.modelId && opts.models[c.type].some((m) => m.id === c.modelId);
+  return {
+    type: c.type, modelId: inCatalogue ? c.modelId! : '', size: c.size, height: c.height, fabric: c.fabric, colour: c.colour,
+    leg: c.leg, seat: c.seat, divan: c.divan, gap: c.gap, modules: c.modules, layout: c.layout, qty: c.qty,
+    product: inCatalogue ? null : {
+      modelId: c.modelId, name: c.name, code: c.code, photoUrl: c.photoUrl, lengthCm: c.lengthCm, widthCm: c.widthCm,
+      sofaCategory: c.sofaCategory, sofaFunction: c.sofaFunction, sourceRequestId: c.sourceRequestId,
+    },
+  };
+}
+
+const bg = (url: string | null | undefined) => (url ? { backgroundImage: `url("${url}")` } : undefined);
+/** A copy can bring a blank (a launch request not filled in yet): shown as
+ *  "—" rather than as the first option it is not. */
+const blankOption = (v: string) => (v ? null : <option value="">—</option>);
+
+export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms, onClose, onAdded }: {
   showroom: ShowroomOption;
   opts: MarketingOptions;
+  /** What Duplicate can copy: every floor's pieces, and the launch board. */
+  displays: DisplayItem[];
+  requests: LaunchRequest[];
+  showrooms: ShowroomOption[];
   onClose: () => void;
   onAdded: (name: string) => void;
 }) => {
   const [a, setA] = useState<AddState>(() => freshAdd(opts, 'sofa'));
   const [building, setBuilding] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
   const add = useAddDisplay();
   const [err, setErr] = useState('');
   const set = (p: Partial<AddState>) => setA((x) => ({ ...x, ...p }));
 
   const models = opts.models[a.type];
   const model = models.find((m) => m.id === a.modelId);
+  /** The copied product, when it is the one picked. */
+  const product = model ? null : a.product;
   const l = useMemo(() => listsFor(opts, a.type, model), [opts, a.type, model]);
   const isSofa = a.type === 'sofa';
   const showFabric = a.type === 'sofa' || a.type === 'bedframe';
   const showSize = a.type === 'mattress' || a.type === 'bedframe';
+  const fabricOpts = withValue(l.fabricSeries, a.fabric);
+  const colourOpts = withValue(l.coloursOf(a.fabric), a.colour);
+  const legOpts = withValue(l.legs, a.leg);
+  const seatOpts = withValue(l.seats, a.seat);
+  const divanOpts = withValue(l.divans, a.divan);
+  const sizeOpts = withValue(l.sizes, a.size);
 
   /** A different Model may not offer what is picked — keep what it does
    *  offer, re-default the rest. */
@@ -95,26 +147,42 @@ export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
     });
   };
 
-  const preview = { ...a, name: model?.name ?? '' };
-  const photo = !isSofa ? model?.photoUrl ?? null : null;
+  /** Who the piece is: a catalogue Model, or the copied product. */
+  const ident = model
+    ? { modelId: model.id, name: model.name, code: model.code, photoUrl: model.photoUrl }
+    : product ? { modelId: product.modelId, name: product.name, code: product.code, photoUrl: product.photoUrl } : null;
+  const preview = { ...a, name: ident?.name ?? '' };
+  const photo = !isSofa ? ident?.photoUrl ?? null : null;
 
   const submit = async () => {
     if (isSofa && !a.modules.length) { setBuilding(true); return; }
-    if (!model) return;
+    if (!ident) return;
     setErr('');
     const extra = a.type === 'sofa' ? { fabric: a.fabric, colour: a.colour, leg: a.leg, seat: a.seat, modules: a.modules, layout: a.layout }
       : a.type === 'mattress' ? { size: a.size, height: a.height.trim() }
       : a.type === 'bedframe' ? { size: a.size, fabric: a.fabric, colour: a.colour, leg: a.leg, divan: a.divan, gap: a.gap.trim() }
       : { qty: a.qty };
+    // A new product brings what Arrive would have: its request, and on a sofa
+    // its size, category and function.
+    const carried = product ? {
+      sourceRequestId: product.sourceRequestId,
+      ...(isSofa ? { lengthCm: product.lengthCm, widthCm: product.widthCm, sofaCategory: product.sofaCategory, sofaFunction: product.sofaFunction } : {}),
+    } : {};
     try {
       await add.mutateAsync({
-        venueId: showroom.id, type: a.type, modelId: model.id, name: model.name, code: model.code,
-        photoUrl: isSofa ? null : model.photoUrl, ...extra,
+        venueId: showroom.id, type: a.type, modelId: ident.modelId, name: ident.name, code: ident.code,
+        photoUrl: isSofa ? null : ident.photoUrl, ...extra, ...carried,
       });
-      onAdded(model.name);
+      onAdded(ident.name);
     } catch (e) {
       setErr((e as Error).message);
     }
+  };
+
+  const duplicate = async (src: DuplicateSource) => {
+    setA(copiedAdd(opts, displayCopyFrom(src)));
+    setErr('');
+    setDuplicating(false);
   };
 
   return (
@@ -138,6 +206,7 @@ export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
                     {t.label}
                   </button>
                 ))}
+                <FormMoreMenu onDuplicate={() => setDuplicating(true)} />
               </div>
 
               {isSofa && (
@@ -155,13 +224,22 @@ export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
 
               <div className={s.field}>
                 <span className={s.fieldLabel}>Model</span>
-                {models.length === 0 ? (
+                {models.length === 0 && !a.product ? (
                   <span className={s.modelEmpty}>No {TYPES.find((t) => t.id === a.type)!.label.toLowerCase()} models in the catalogue yet.</span>
                 ) : (
                   <div className={s.modelGrid}>
+                    {a.product && (
+                      <button type="button" className={`${s.modelTile} ${product ? s.modelTileOn : ''}`} onClick={() => set({ modelId: '' })}>
+                        <span className={`${s.modelTilePhoto} ${s.modelTileArt}`} style={isSofa ? undefined : bg(a.product.photoUrl)}>
+                          {isSofa && <SofaLayoutPreview layout={a.layout} modules={a.modules} depth={seatDepth(a.seat)} art={opts.moduleArt} pad={4} />}
+                        </span>
+                        <span className={s.modelTileName}>{a.product.name}</span>
+                        <span className={s.modelTileSub}>{a.product.sourceRequestId ? 'New product' : 'Not in the catalogue'}</span>
+                      </button>
+                    )}
                     {models.map((m) => (
                       <button key={m.id} type="button" className={`${s.modelTile} ${m.id === a.modelId ? s.modelTileOn : ''}`} onClick={() => pickModel(m.id)}>
-                        <span className={s.modelTilePhoto} style={m.photoUrl ? { backgroundImage: `url("${m.photoUrl}")` } : undefined} />
+                        <span className={s.modelTilePhoto} style={bg(m.photoUrl)} />
                         <span className={s.modelTileName}>{m.name}</span>
                       </button>
                     ))}
@@ -173,7 +251,7 @@ export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
                 <div className={s.field}>
                   <span className={s.fieldLabel}>Display size</span>
                   <div className={s.chipRow}>
-                    {l.sizes.map((v) => (
+                    {sizeOpts.map((v) => (
                       <button key={v} type="button" className={`${s.sizeChip} ${a.size === v ? s.chipOn : ''}`} onClick={() => set({ size: v })}>{v}</button>
                     ))}
                   </div>
@@ -195,26 +273,30 @@ export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
                   <label className={s.field}>
                     <span className={s.fieldLabel}>Fabric series</span>
                     <select className={s.select} value={a.fabric} onChange={(e) => set({ fabric: e.target.value, colour: l.coloursOf(e.target.value)[0] ?? '' })}>
-                      {l.fabricSeries.map((o) => <option key={o} value={o}>{o}</option>)}
+                      {blankOption(a.fabric)}
+                      {fabricOpts.map((o) => <option key={o} value={o}>{o}</option>)}
                     </select>
                   </label>
                   <label className={s.field}>
                     <span className={s.fieldLabel}>Colour</span>
                     <select className={s.select} value={a.colour} onChange={(e) => set({ colour: e.target.value })}>
-                      {l.coloursOf(a.fabric).map((o) => <option key={o} value={o}>{o}</option>)}
+                      {blankOption(a.colour)}
+                      {colourOpts.map((o) => <option key={o} value={o}>{o}</option>)}
                     </select>
                   </label>
                   <label className={s.field}>
                     <span className={s.fieldLabel}>Leg height</span>
                     <select className={s.select} value={a.leg} onChange={(e) => set({ leg: e.target.value })}>
-                      {l.legs.map((o) => <option key={o} value={o}>{o}</option>)}
+                      {blankOption(a.leg)}
+                      {legOpts.map((o) => <option key={o} value={o}>{o}</option>)}
                     </select>
                   </label>
                   {isSofa && (
                     <label className={s.field}>
                       <span className={s.fieldLabel}>Seat</span>
                       <select className={s.select} value={a.seat} onChange={(e) => set({ seat: e.target.value })}>
-                        {l.seats.map((o) => <option key={o} value={o}>{o}</option>)}
+                        {blankOption(a.seat)}
+                        {seatOpts.map((o) => <option key={o} value={o}>{o}</option>)}
                       </select>
                     </label>
                   )}
@@ -223,7 +305,8 @@ export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
                       <label className={s.field}>
                         <span className={s.fieldLabel}>Divan height</span>
                         <select className={s.select} value={a.divan} onChange={(e) => set({ divan: e.target.value })}>
-                          {l.divans.map((o) => <option key={o} value={o}>{o}</option>)}
+                          {blankOption(a.divan)}
+                          {divanOpts.map((o) => <option key={o} value={o}>{o}</option>)}
                         </select>
                       </label>
                       <label className={s.field}>
@@ -256,7 +339,7 @@ export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
               </div>
               {err && <div className={s.formError}>{err}</div>}
               <div className={s.spacer} />
-              <button type="button" className={s.submitBig} disabled={add.isPending || (!model && !isSofa)} onClick={() => void submit()}>
+              <button type="button" className={s.submitBig} disabled={add.isPending || (!ident && !isSofa)} onClick={() => void submit()}>
                 Add to {showroom.name}
               </button>
             </div>
@@ -270,20 +353,34 @@ export const AddDisplayModal = ({ showroom, opts, onClose, onAdded }: {
           initialLayout={a.layout}
           initialModules={a.modules}
           pool={opts.sofaPool}
-          seats={l.seats}
+          seats={seatOpts}
           seat={a.seat}
           onSeat={(v) => set({ seat: v })}
-          fabrics={l.fabricSeries}
+          fabrics={fabricOpts}
           fabric={a.fabric}
           onFabric={(f) => set({ fabric: f, colour: l.coloursOf(f)[0] ?? '' })}
-          colours={l.coloursOf(a.fabric)}
+          colours={colourOpts}
           colour={a.colour}
           onColour={(c) => set({ colour: c })}
-          legs={l.legs}
+          legs={legOpts}
           leg={a.leg}
           onLeg={(v) => set({ leg: v })}
           onCancel={() => setBuilding(false)}
           onSave={({ layout, modules }) => { set({ modules, layout }); setBuilding(false); }}
+        />
+      )}
+
+      {duplicating && (
+        <DuplicateFrom
+          displays={displays}
+          requests={requests}
+          showrooms={showrooms}
+          types={TYPES.map((t) => t.id)}
+          initialTab="display"
+          hereId={showroom.id}
+          opts={opts}
+          onPick={duplicate}
+          onClose={() => setDuplicating(false)}
         />
       )}
     </>

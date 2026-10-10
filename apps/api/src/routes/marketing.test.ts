@@ -241,12 +241,56 @@ describe('displays', () => {
     expect(state.inserted).toBeNull();
   });
 
-  it('stamps the caller on a new display and never sets is_new', async () => {
+  it('stamps the caller on a new display, and an ordinary add is not NEW', async () => {
     meAnswers(MARKETING);
     state.single = { id: 'd1', venue_id: '107', type: 'mattress', name: 'AKKA-FIRM', modules: [], qty: 1, is_new: false };
-    const res = await app().request('/marketing/displays', json('POST', { venueId: '107', type: 'mattress', name: 'AKKA-FIRM', size: 'King', height: '12' }), env);
+    const res = await app().request('/marketing/displays', json('POST', { venueId: '107', type: 'mattress', name: 'AKKA-FIRM', size: 'King', height: '12', isNew: true }), env);
     expect(res.status).toBe(201);
-    expect(state.inserted).toMatchObject({ venue_id: '107', type: 'mattress', size: 'King', height: '12', is_new: false, created_by: '41', created_by_name: 'Marketing' });
+    expect(state.inserted).toMatchObject({
+      venue_id: '107', type: 'mattress', size: 'King', height: '12', is_new: false, source_request_id: null,
+      created_by: '41', created_by_name: 'Marketing',
+    });
+  });
+
+  /* Duplicate (owner 2026-10-10): a copy of a new product. */
+  const RID = '6f1f6c1e-0000-4000-8000-0000000000a1';
+  const COPY = {
+    venueId: '107', type: 'sofa', modelId: null, name: 'Untitled sofa', code: 'SL-2207', modules: ['2A(LHF)', 'L(RHF)'],
+    lengthCm: 280, widthCm: 160, sofaCategory: 'Seater', sofaFunction: 'Push back', sourceRequestId: RID,
+  };
+
+  it('brings a new product’s size, category, function and request with a copy — and NEW', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_launch_requests = { maybe: { id: RID, type: 'sofa' } };
+    state.single = { id: 'd4', venue_id: '107', type: 'sofa', name: 'Untitled sofa', modules: COPY.modules, qty: 1, is_new: true, source_request_id: RID };
+    const res = await app().request('/marketing/displays', json('POST', COPY), env);
+    expect(res.status).toBe(201);
+    expect(state.inserted).toMatchObject({
+      model_id: null, code: 'SL-2207', is_new: true, source_request_id: RID,
+      length_cm: 280, width_cm: 160, sofa_category: 'Seater', sofa_function: 'Push back',
+    });
+    expect((await res.json() as { display: { sourceRequestId: unknown } }).display.sourceRequestId).toBe(RID);
+  });
+
+  it('refuses a copy naming a request that is not on record, or not of its kind', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_launch_requests = { maybe: null };
+    const gone = await app().request('/marketing/displays', json('POST', COPY), env);
+    expect(gone.status).toBe(409);
+    expect(await gone.json()).toEqual({ error: 'unknown_request', reason: 'The launch request this is copied from is not on record.' });
+    state.tables.marketing_launch_requests = { maybe: { id: RID, type: 'mattress' } };
+    const other = await app().request('/marketing/displays', json('POST', COPY), env);
+    expect(other.status).toBe(409);
+    expect(state.inserted).toBeNull();
+  });
+
+  it('keeps a sofa’s size, category and function off any other piece', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_launch_requests = { maybe: { id: RID, type: 'mattress' } };
+    state.single = { id: 'd5', venue_id: '107', type: 'mattress', name: 'ARRUS-PLUS', modules: [], qty: 1, is_new: true };
+    const res = await app().request('/marketing/displays', json('POST', { ...COPY, type: 'mattress', name: 'ARRUS-PLUS', modules: [] }), env);
+    expect(res.status).toBe(201);
+    expect(state.inserted).toMatchObject({ length_cm: null, width_cm: null, sofa_category: '', sofa_function: '', source_request_id: RID, is_new: true });
   });
 
   it('keeps a sofa’s layout, and gives a mattress none', async () => {
@@ -543,6 +587,79 @@ describe('sofa category + function lists', () => {
     const res = await app().request('/marketing/sofa-options', json('POST', { name: 'Recliner' }), env);
     expect(res.status).toBe(403);
     expect(state.inserted).toBeNull();
+    const whole = await app().request(`/marketing/sofa-categories/${CAT}`, json('PUT', { name: 'Seater', functions: [] }), env);
+    expect(whole.status).toBe(403);
+    expect(state.lastRpc).toBeNull();
+  });
+
+  /* 0221 (owner 2026-10-10): the edit dialog saves a category and its whole
+     function list at once. */
+  const F1 = '6f1f6c1e-0000-4000-8000-0000000000f1';
+
+  it('saves a category and its whole list in one transaction, as the caller', async () => {
+    meAnswers(MARKETING);
+    state.rpcResult = CAT;
+    state.tables.marketing_sofa_options = {
+      list: [
+        { id: CAT, kind: 'category', parent_id: null, name: 'Sitter', seq: 1 },
+        { id: F1, kind: 'function', parent_id: CAT, name: 'Fixed', seq: 3 },
+        { id: 'f9', kind: 'function', parent_id: CAT, name: 'Recliner', seq: 12 },
+      ],
+    };
+    const res = await app().request(`/marketing/sofa-categories/${CAT}`, json('PUT', {
+      name: ' Sitter ', functions: [{ id: F1, name: 'Fixed ' }, { name: 'Recliner' }],
+    }), env);
+    expect(res.status).toBe(200);
+    expect(state.lastRpc).toEqual({
+      fn: 'marketing_save_sofa_category',
+      args: { p_category_id: CAT, p_name: 'Sitter', p_functions: [{ id: F1, name: 'Fixed' }, { name: 'Recliner' }], p_by: '41', p_by_name: 'Marketing' },
+    });
+    expect(state.orFilter).toBe(`id.eq.${CAT},parent_id.eq.${CAT}`);
+    expect(await res.json()).toEqual({
+      category: { id: CAT, name: 'Sitter', functions: [{ id: F1, name: 'Fixed' }, { id: 'f9', name: 'Recliner' }] },
+    });
+  });
+
+  it('adds a category with its functions', async () => {
+    meAnswers(MARKETING);
+    state.rpcResult = CAT;
+    state.tables.marketing_sofa_options = { list: [{ id: CAT, kind: 'category', parent_id: null, name: 'Chaise', seq: 9 }] };
+    const res = await app().request('/marketing/sofa-categories', json('POST', { name: 'Chaise', functions: [{ name: 'Fixed' }] }), env);
+    expect(res.status).toBe(201);
+    expect(state.lastRpc?.args).toMatchObject({ p_category_id: null, p_name: 'Chaise', p_functions: [{ name: 'Fixed' }] });
+  });
+
+  it('refuses a function listed twice before writing anything', async () => {
+    meAnswers(MARKETING);
+    const res = await app().request(`/marketing/sofa-categories/${CAT}`, json('PUT', {
+      name: 'Sitter', functions: [{ id: F1, name: 'Fixed' }, { name: 'fixed' }],
+    }), env);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'duplicate_name', reason: 'fixed is on the list twice.' });
+    expect(state.lastRpc).toBeNull();
+  });
+
+  it('says what the transaction refused', async () => {
+    meAnswers(MARKETING);
+    const put = () => app().request(`/marketing/sofa-categories/${CAT}`, json('PUT', { name: 'Chair', functions: [] }), env);
+    state.rpcError = { message: 'duplicate_category' };
+    let res = await put();
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'duplicate_name', reason: 'There is already a category called Chair.' });
+    state.rpcError = { message: 'function_not_found' };
+    res = await put();
+    expect(res.status).toBe(409);
+    expect((await res.json() as { error: string }).error).toBe('list_changed');
+    state.rpcError = { message: 'category_not_found' };
+    res = await put();
+    expect(res.status).toBe(404);
+  });
+
+  it('404s an id that is not one', async () => {
+    meAnswers(MARKETING);
+    const res = await app().request('/marketing/sofa-categories/c1', json('PUT', { name: 'Chair', functions: [] }), env);
+    expect(res.status).toBe(404);
+    expect(state.lastRpc).toBeNull();
   });
 });
 

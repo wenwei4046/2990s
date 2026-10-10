@@ -211,6 +211,41 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
     st.options = [...(st.options ?? []), row]; save();
     return json({ option: { id: row.id, kind: row.kind, categoryId: row.parent_id, name: row.name } }, 201);
   }
+  // 0221: a category and its whole function list at once, as the API's
+  // marketing_save_sofa_category does it.
+  const whole = /^\/marketing\/sofa-categories(?:\/([^/]+))?$/.exec(path);
+  if (whole && (method === 'POST' ? !whole[1] : method === 'PUT' && !!whole[1])) {
+    const name = String(body.name ?? '').trim();
+    const fns = ((body.functions ?? []) as Row[]).map((f) => ({ id: f.id as string | undefined, name: String(f.name ?? '').trim() }));
+    if (!name || fns.some((f) => !f.name)) return json({ error: 'validation_failed' }, 400);
+    const lower = fns.map((f) => f.name.toLowerCase());
+    const twice = fns.find((f, i) => lower.indexOf(f.name.toLowerCase()) !== i);
+    if (twice) return json({ error: 'duplicate_name', reason: `${twice.name} is on the list twice.` }, 400);
+    const all = (st.options ??= []);
+    const liveOpts = all.filter((x) => !x.archived_at);
+    let cat: Row | undefined;
+    if (whole[1]) {
+      cat = liveOpts.find((x) => x.id === decodeURIComponent(whole[1]!) && x.kind === 'category');
+      if (!cat) return json({ error: 'not_found', reason: 'This category is no longer on the list.' }, 404);
+    }
+    if (liveOpts.some((x) => x.kind === 'category' && x.id !== cat?.id && String(x.name).toLowerCase() === name.toLowerCase())) {
+      return json({ error: 'duplicate_name', reason: `There is already a category called ${name}.` }, 409);
+    }
+    const mine = cat ? liveOpts.filter((x) => x.parent_id === cat!.id) : [];
+    if (fns.some((f) => f.id && !mine.some((x) => x.id === f.id))) {
+      return json({ error: 'list_changed', reason: 'Someone else changed this list meanwhile. Close it and open it again.' }, 409);
+    }
+    if (!cat) { cat = option(`sim-o${st.serial++}`, 'category', null, name, st.serial); all.push(cat); }
+    cat.name = name;
+    for (const x of mine) if (!fns.some((f) => f.id === x.id)) x.archived_at = now();
+    for (const f of fns) {
+      const kept = f.id ? mine.find((x) => x.id === f.id) : undefined;
+      if (kept) kept.name = f.name;
+      else all.push(option(`sim-o${st.serial++}`, 'function', cat.id, f.name, st.serial));
+    }
+    save();
+    return json({ category: optionsWire(all).find((c) => c.id === cat!.id) }, whole[1] ? 200 : 201);
+  }
   let o = /^\/marketing\/sofa-options\/([^/]+)$/.exec(path);
   if (o) {
     const row = (st.options ?? []).find((x) => x.id === decodeURIComponent(o![1]!) && !x.archived_at);
@@ -276,10 +311,18 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
     const gone = unlisted(body.venueId);
     if (gone) return gone;
     if (body.type === 'sofa' && !(body.modules ?? []).length) return json({ error: 'validation_failed', reason: 'A sofa needs its components.' }, 400);
+    // A copy of a new product names the request it came from (Duplicate).
+    if (body.sourceRequestId && st.requests.find((r) => r.id === body.sourceRequestId)?.type !== body.type) {
+      return json({ error: 'unknown_request', reason: 'The launch request this is copied from is not on record.' }, 409);
+    }
+    const sofa = body.type === 'sofa';
     const row = display(`sim-d${st.serial++}`, body.venueId, body.type, body.name, body.code ?? '', body.photoUrl ?? null, {
       model_id: body.modelId ?? null, fabric: body.fabric ?? '', colour: body.colour ?? '', leg: body.leg ?? '', seat: body.seat ?? '',
-      modules: body.modules ?? [], layout: body.type === 'sofa' ? (body.layout ?? null) : null, size: body.size ?? '', height: body.height ?? '', divan: body.divan ?? '', gap: body.gap ?? '',
-      qty: body.qty ?? 1, created_at: now(), created_by_name: me.name,
+      modules: body.modules ?? [], layout: sofa ? (body.layout ?? null) : null, size: body.size ?? '', height: body.height ?? '', divan: body.divan ?? '', gap: body.gap ?? '',
+      qty: body.qty ?? 1, is_new: !!body.sourceRequestId, source_request_id: body.sourceRequestId ?? null,
+      length_cm: sofa ? (body.lengthCm ?? null) : null, width_cm: sofa ? (body.widthCm ?? null) : null,
+      sofa_category: sofa ? (body.sofaCategory ?? '') : '', sofa_function: sofa ? (body.sofaFunction ?? '') : '',
+      created_at: now(), created_by_name: me.name,
     });
     st.displays.push(row); save();
     return json({ display: displayWire(row) }, 201);

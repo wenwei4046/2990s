@@ -1,6 +1,6 @@
 // ----------------------------------------------------------------------------
 // The Marketing section's data, read and written against 2990's own API
-// (apps/api/src/routes/marketing.ts, tables in migrations 0217–0219) —
+// (apps/api/src/routes/marketing.ts, tables in migrations 0217–0221) —
 // including the showroom list itself, which the section keeps (owner
 // 2026-10-09: a record, not Houzs's venue master), and the sofa Category →
 // Function lists its Maintenance tab keeps (0219).
@@ -170,21 +170,35 @@ export function useMarketingState(enabled = true) {
 /** A launch request's photo, with how closely the coming sofa matches it. */
 export interface RequestPhoto { dataUrl: string; fileName: string; match: PhotoMatch; note: string }
 
+const photoKey = (requestId: string | null, version: string | null) => ['marketing', 'request-photo', requestId, version] as const;
+
+async function fetchRequestPhoto(requestId: string): Promise<RequestPhoto | null> {
+  const body = await call<{ photo: { dataUrl: string; fileName: string; match: string; note: string } | null }>(
+    `/requests/${encodeURIComponent(requestId)}/photo`,
+  );
+  const p = body.photo;
+  return p ? { dataUrl: p.dataUrl, fileName: p.fileName, match: asMatch(p.match), note: p.note } : null;
+}
+
 /** One request's photo, as a data: URL — the form's, or a display's through
  *  the request it arrived from. `version` (the photo's upload time) keys the
  *  cache; null fetches nothing. */
 export function useRequestPhoto(requestId: string | null, version: string | null) {
   return useQuery<RequestPhoto | null>({
-    queryKey: ['marketing', 'request-photo', requestId, version],
+    queryKey: photoKey(requestId, version),
     enabled: !!requestId && !!version,
     staleTime: Infinity,
-    queryFn: async () => {
-      const body = await call<{ photo: { dataUrl: string; fileName: string; match: string; note: string } | null }>(
-        `/requests/${encodeURIComponent(requestId!)}/photo`,
-      );
-      const p = body.photo;
-      return p ? { dataUrl: p.dataUrl, fileName: p.fileName, match: asMatch(p.match), note: p.note } : null;
-    },
+    queryFn: () => fetchRequestPhoto(requestId!),
+  });
+}
+
+/** The same read, on demand: Duplicate copies a source's photo into a form. */
+export function useFetchRequestPhoto() {
+  const qc = useQueryClient();
+  return (requestId: string, version: string) => qc.fetchQuery<RequestPhoto | null>({
+    queryKey: photoKey(requestId, version),
+    staleTime: Infinity,
+    queryFn: () => fetchRequestPhoto(requestId),
   });
 }
 
@@ -234,6 +248,10 @@ export interface NewDisplay {
   venueId: string; type: DisplayType; modelId: string | null; name: string; code: string; photoUrl: string | null;
   fabric?: string; colour?: string; leg?: string; seat?: string; modules?: string[]; layout?: SofaLayout | null;
   size?: string; height?: string; divan?: string; gap?: string; qty?: number;
+  /** A copy of a new product (Duplicate): what Arrive would have carried, and
+   *  the launch request it came from. */
+  lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
+  sourceRequestId?: string | null;
 }
 
 export function useAddDisplay() {
@@ -302,21 +320,23 @@ export function useArriveRequest() {
   });
 }
 
-/** Add a sofa category (no `categoryId`), a function under one, or rename
- *  either (`id`). Maintenance tab. */
-export function useSaveSofaOption() {
+/** Save a sofa category with its whole function list, in one transaction
+ *  (0221): no `id` adds the category. Each function with an `id` keeps (or
+ *  renames) that one, one without adds it, and one left out comes off the
+ *  list. Maintenance tab. */
+export function useSaveSofaCategory() {
   const done = useInvalidate();
   return useMutation({
-    mutationFn: ({ id, categoryId, name }: { id?: string; categoryId?: string | null; name: string }) =>
+    mutationFn: ({ id, name, functions }: { id: string | null; name: string; functions: Array<{ id?: string; name: string }> }) =>
       (id
-        ? call<{ option: { id: string } }>(`/sofa-options/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) })
-        : call<{ option: { id: string } }>('/sofa-options', { method: 'POST', body: JSON.stringify({ name, categoryId: categoryId ?? null }) })
-      ).then((r) => r.option),
+        ? call<{ category: SofaCategoryOption }>(`/sofa-categories/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ name, functions }) })
+        : call<{ category: SofaCategoryOption }>('/sofa-categories', { method: 'POST', body: JSON.stringify({ name, functions }) })
+      ).then((r) => r.category),
     onSuccess: done,
   });
 }
 
-/** Take a category (with its functions) or a function off the lists. */
+/** Take a category, with its functions, off the lists. */
 export function useRemoveSofaOption() {
   const done = useInvalidate();
   return useMutation({
