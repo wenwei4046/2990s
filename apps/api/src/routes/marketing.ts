@@ -184,8 +184,12 @@ const DISPLAY_SELECT =
   'source_request_id, created_at, created_by_name';
 
 const cmOrNull = (v: unknown): number | null => (v == null ? null : Number(v));
+const timeOrNull = (v: unknown): string | null => (v == null ? null : String(v));
 
-const displayToWire = (r: Record<string, unknown>) => ({
+/** `photoAt` is the version of the photo its launch request was filed with
+ *  (that request's photo_updated_at), null when there is none — so a card can
+ *  show the photo beside the layout without asking first (owner 2026-10-10). */
+const displayToWire = (r: Record<string, unknown>, photoAt: string | null = null) => ({
   id: String(r.id),
   venueId: String(r.venue_id),
   type: String(r.type),
@@ -212,6 +216,7 @@ const displayToWire = (r: Record<string, unknown>) => ({
   sofaFunction: String(r.sofa_function ?? ''),
   // Its photo is read through the request it arrived from.
   sourceRequestId: r.source_request_id == null ? null : String(r.source_request_id),
+  photoAt,
   createdAt: String(r.created_at ?? ''),
   createdByName: r.created_by_name == null ? null : String(r.created_by_name),
 });
@@ -496,10 +501,26 @@ marketing.get('/state', async (c) => {
   ]);
   const failed = showrooms.error ?? displays.error ?? requests.error ?? plans.error ?? options.error;
   if (failed) return c.json({ error: 'fetch_failed', reason: failed.message }, 500);
+  const displayRows = (displays.data ?? []) as unknown as Record<string, unknown>[];
+  const requestRows = (requests.data ?? []) as unknown as Record<string, unknown>[];
+  // A sofa on display shows its launch request's photo: its version is that
+  // request's photo time — from the open requests just read, or, for one that
+  // has arrived (no longer open), read here, in batches a URL can carry.
+  const photoAtOf = new Map(requestRows.map((r) => [String(r.id), timeOrNull(r.photo_updated_at)] as const));
+  const arrived = [...new Set(displayRows.flatMap((d) => (
+    d.type === 'sofa' && d.source_request_id != null && !photoAtOf.has(String(d.source_request_id)) ? [String(d.source_request_id)] : []
+  )))];
+  for (let i = 0; i < arrived.length; i += 100) {
+    const { data, error } = await sb.from('marketing_launch_requests').select('id, photo_updated_at').in('id', arrived.slice(i, i + 100));
+    if (error) return c.json({ error: 'fetch_failed', reason: error.message }, 500);
+    for (const r of (data ?? []) as unknown as Record<string, unknown>[]) photoAtOf.set(String(r.id), timeOrNull(r.photo_updated_at));
+  }
   return c.json({
     showrooms: ((showrooms.data ?? []) as unknown as Record<string, unknown>[]).map(showroomToWire),
-    displays: ((displays.data ?? []) as unknown as Record<string, unknown>[]).map(displayToWire),
-    requests: ((requests.data ?? []) as unknown as Record<string, unknown>[]).map(requestToWire),
+    displays: displayRows.map((d) => displayToWire(
+      d, d.type === 'sofa' && d.source_request_id != null ? photoAtOf.get(String(d.source_request_id)) ?? null : null,
+    )),
+    requests: requestRows.map(requestToWire),
     floorplans: ((plans.data ?? []) as unknown as Record<string, unknown>[]).map((r) => ({
       venueId: String(r.venue_id),
       updatedAt: String(r.updated_at ?? ''),
@@ -617,16 +638,19 @@ marketing.post('/displays', async (c) => {
   const sb = admin(c);
   const unlisted = await listedShowroom(c, sb, v.venueId);
   if (unlisted) return unlisted;
+  let photoAt: string | null = null;
   if (v.sourceRequestId) {
     const { data: src, error: srcErr } = await sb
       .from('marketing_launch_requests')
-      .select('id, type')
+      .select('id, type, photo_updated_at')
       .eq('id', v.sourceRequestId)
       .maybeSingle();
     if (srcErr) return c.json({ error: 'fetch_failed', reason: srcErr.message }, 500);
-    if ((src as { type?: string } | null)?.type !== v.type) {
+    const s = src as { type?: string; photo_updated_at?: unknown } | null;
+    if (s?.type !== v.type) {
       return c.json({ error: 'unknown_request', reason: 'The launch request this is copied from is not on record.' }, 409);
     }
+    photoAt = v.type === 'sofa' ? timeOrNull(s.photo_updated_at) : null;
   }
   const isSofa = v.type === 'sofa';
   const { data, error } = await sb
@@ -664,7 +688,7 @@ marketing.post('/displays', async (c) => {
     .select(DISPLAY_SELECT)
     .single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
-  return c.json({ display: displayToWire(data as unknown as Record<string, unknown>) }, 201);
+  return c.json({ display: displayToWire(data as unknown as Record<string, unknown>, photoAt) }, 201);
 });
 
 /** "Remove from display" — stamps removed_at; the row stays as history. */

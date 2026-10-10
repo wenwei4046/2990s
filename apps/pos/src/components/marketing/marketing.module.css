@@ -1096,3 +1096,14 @@
 .dupBusy { font-size: 11px; font-weight: 600; color: var(--c-burnt); }
 .dupEmpty { padding: 40px 16px; text-align: center; font-size: 13px; color: var(--fg-soft); }
 .dupError { margin: 0 20px 16px; }
+
+/* ════════════════════════ 2026-10-10 — the photo beside the layout ════════════════════════
+   Owner 2026-10-10: a request's card on the board, and a sofa's card on the
+   floor, show the sofa as laid out (as before) and the photo it was filed
+   with, side by side. Shown whole (contain) on white, like every reference
+   photo in this section. */
+.reqThumbs { flex: none; display: flex; gap: 6px; }
+.photoTile { background-color: #fff; border: 1px solid var(--line); }
+.photoTileImg { display: block; width: 100%; height: 100%; object-fit: contain; }
+.picHalf { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; justify-content: center; }
+.picHalfPhoto { background-color: #fff; border-left: 1px solid var(--line); }

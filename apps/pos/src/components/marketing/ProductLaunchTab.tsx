@@ -9,6 +9,7 @@ import {
 import { useMarketingOptions } from './marketing-options';
 import { useArriveRequest, useDeleteRequest, useRequestPhoto, type MarketingState } from '../../lib/marketing-api';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
+import { RequestPhotoTile } from './RequestPhotoTile';
 import { LaunchRequestModal } from './LaunchRequestModal';
 import { ExportModal } from './ExportModal';
 import s from './marketing.module.css';
@@ -84,10 +85,16 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
     return (
       <div key={r.id ?? 'draft'} className={s.reqCard}>
         <div className={s.reqTop}>
-          <div className={s.reqThumb}>
-            {r.type === 'sofa' && r.modules.length > 0
-              ? <SofaLayoutPreview layout={r.layout} modules={r.modules} depth={seatDepth(r.seat)} art={opts.moduleArt} />
-              : <Icon size={26} strokeWidth={1.75} className={s.icon} />}
+          <div className={s.reqThumbs}>
+            <div className={s.reqThumb}>
+              {r.type === 'sofa' && r.modules.length > 0
+                ? <SofaLayoutPreview layout={r.layout} modules={r.modules} depth={seatDepth(r.seat)} art={opts.moduleArt} />
+                : <Icon size={26} strokeWidth={1.75} className={s.icon} />}
+            </div>
+            {/* The photo it was filed with, beside the layout (owner 2026-10-10). */}
+            {r.type === 'sofa' && r.id && r.photoAt && (
+              <RequestPhotoTile requestId={r.id} version={r.photoAt} className={`${s.reqThumb} ${s.photoTile}`} />
+            )}
           </div>
           <div className={s.reqInfo}>
             <div className={s.reqLine1}>

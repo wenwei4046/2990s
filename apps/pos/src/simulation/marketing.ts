@@ -122,6 +122,8 @@ const displayWire = (r: Row) => ({
   fabric: r.fabric, colour: r.colour, leg: r.leg, seat: r.seat, modules: r.modules, size: r.size, height: r.height, divan: r.divan,
   gap: r.gap, qty: r.qty, layout: r.layout ?? null, lengthCm: r.length_cm ?? null, widthCm: r.width_cm ?? null, sofaCategory: r.sofa_category ?? '',
   sofaFunction: r.sofa_function ?? '', sourceRequestId: r.source_request_id ?? null, createdAt: r.created_at, createdByName: r.created_by_name,
+  // The API's: the photo time of the request a sofa came from.
+  photoAt: r.type === 'sofa' && r.source_request_id ? photos()[r.source_request_id]?.updated_at ?? null : null,
 });
 const requestWire = (r: Row) => ({
   id: r.id, type: r.type, status: r.status, supplierCode: r.supplier_code, model: r.model, fabric: r.fabric, colour: r.colour, leg: r.leg,

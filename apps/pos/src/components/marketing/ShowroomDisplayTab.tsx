@@ -6,7 +6,7 @@
 import { useMemo, useState, type ChangeEvent } from 'react';
 import { ImageUp, Pencil, Plus, Store, Trash2, Upload, X } from 'lucide-react';
 import {
-  detailRows, moduleInfo, seatDepth, shapeName, specOf, tagsOf, typeOf, TYPES,
+  detailRows, moduleInfo, photoSourceOf, seatDepth, shapeName, specOf, tagsOf, typeOf, TYPES,
   type DisplayItem, type DisplayType,
 } from './marketing-model';
 import { useMarketingOptions, type MarketingOptions } from './marketing-options';
@@ -14,6 +14,7 @@ import {
   prepareFloorplan, useDeleteFloorplan, useFloorplan, usePutFloorplan, useRemoveDisplay, useRequestPhoto, type MarketingState,
 } from '../../lib/marketing-api';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
+import { RequestPhotoTile } from './RequestPhotoTile';
 import { AddDisplayModal } from './AddDisplayModal';
 import { ShowroomDialog } from './ShowroomDialog';
 import s from './marketing.module.css';
@@ -30,11 +31,11 @@ const photoOf = (it: DisplayItem, opts: MarketingOptions): string | null => {
 const initialOf = (name: string) => (name || '?').charAt(0).toUpperCase();
 const bg = (url: string | null) => (url ? { backgroundImage: `url("${url}")` } : undefined);
 
-/** The photo a piece's launch request was filed with (0219), if any, and
- *  whether the piece is exactly the sofa in it. An arrived request cannot
- *  change any more, so one fetch per request is enough. */
-const RequestPhoto = ({ requestId }: { requestId: string }) => {
-  const p = useRequestPhoto(requestId, 'arrived').data;
+/** The photo a piece's launch request was filed with (0219), and whether the
+ *  piece is exactly the sofa in it. Read by its version, so a request still
+ *  open whose photo is replaced is read again. */
+const RequestPhoto = ({ requestId, version }: { requestId: string; version: string }) => {
+  const p = useRequestPhoto(requestId, version).data;
   if (!p) return null;
   return (
     <div className={s.compsBlock}>
@@ -275,6 +276,8 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
               <div className={s.displayGrid}>
                 {list.map((it) => {
                   const photo = photoOf(it, opts);
+                  // A sofa from the launch board shows its photo beside the layout (owner 2026-10-10).
+                  const shot = it.type === 'sofa' ? photoSourceOf({ kind: 'display', item: it }) : null;
                   return (
                     <div
                       key={it.id}
@@ -285,8 +288,16 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrawerId(it.id); } }}
                     >
                       <div className={s.displayPic} style={bg(photo)}>
-                        {it.type === 'sofa' && (
+                        {it.type === 'sofa' && !shot && (
                           <SofaLayoutPreview layout={it.layout} modules={it.modules} depth={seatDepth(it.seat)} art={opts.moduleArt} pad={18} />
+                        )}
+                        {shot && (
+                          <>
+                            <div className={s.picHalf}>
+                              <SofaLayoutPreview layout={it.layout} modules={it.modules} depth={seatDepth(it.seat)} art={opts.moduleArt} pad={10} />
+                            </div>
+                            <RequestPhotoTile requestId={shot.requestId} version={shot.version} className={`${s.picHalf} ${s.picHalfPhoto}`} />
+                          </>
                         )}
                         {it.type !== 'sofa' && !photo && <span className={s.initialArt}>{initialOf(it.name)}</span>}
                         {it.isNew && <span className={s.newPill}>New</span>}
@@ -349,7 +360,9 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
                   <div key={row.k} className={s.kvRow}><span className={s.kvKey}>{row.k}</span><span className={s.kvVal}>{row.v}</span></div>
                 ))}
               </div>
-              {drawer.it.type === 'sofa' && drawer.it.sourceRequestId && <RequestPhoto requestId={drawer.it.sourceRequestId} />}
+              {drawer.it.type === 'sofa' && drawer.it.sourceRequestId && drawer.it.photoAt && (
+                <RequestPhoto requestId={drawer.it.sourceRequestId} version={drawer.it.photoAt} />
+              )}
               {drawer.it.type === 'sofa' && (
                 <div className={s.compsBlock}>
                   <div className={s.compsTitle}>Compartments · left to right</div>

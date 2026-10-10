@@ -10,6 +10,8 @@ type Answer = {
   single?: Record<string, unknown> | null;
   maybe?: Record<string, unknown> | null;
   list?: Record<string, unknown>[];
+  /** Lists for successive list reads of the table, used up in order before `list`. */
+  lists?: Record<string, unknown>[][];
   count?: number;
   error?: { message: string; code?: string } | null;
 };
@@ -27,11 +29,14 @@ const state = vi.hoisted(() => ({
   updated: null as Record<string, unknown> | null,
   lastRpc: null as { fn: string; args: Record<string, unknown> } | null,
   orFilter: null as string | null,
+  /** Every table read or written, in order. */
+  reads: [] as string[],
 }));
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
     from: (table: string) => {
+      state.reads.push(table);
       const own = () => state.tables[table] ?? {};
       const pick = <K extends keyof Answer>(k: K, shared: unknown) => (k in own() ? own()[k] : shared);
       const obj: any = {};
@@ -42,7 +47,10 @@ vi.mock('@supabase/supabase-js', () => ({
       obj.upsert = (p: Record<string, unknown>) => { state.inserted = p; return obj; };
       obj.single = async () => ({ data: pick('single', state.single), error: pick('error', state.error) });
       obj.maybeSingle = async () => ({ data: pick('maybe', state.maybe), error: pick('error', state.error) });
-      obj.then = (resolve: any) => resolve({ data: pick('list', state.list), error: pick('error', state.error), count: pick('count', 0) });
+      obj.then = (resolve: any) => {
+        const next = own().lists?.shift();
+        return resolve({ data: next ?? pick('list', state.list), error: pick('error', state.error), count: pick('count', 0) });
+      };
       return obj;
     },
     rpc: async (fn: string, args: Record<string, unknown>) => {
@@ -87,7 +95,7 @@ beforeEach(() => {
   // Every write files under a showroom; by default it is a listed one.
   state.tables = { marketing_showrooms: { maybe: { id: '107' } } };
   state.rpcResult = null; state.rpcError = null; state.inserted = null; state.updated = null; state.lastRpc = null;
-  state.orFilter = null;
+  state.orFilter = null; state.reads = [];
 });
 
 /** A 1×1 PNG, base64 — small enough for any size check. */
@@ -270,6 +278,57 @@ describe('displays', () => {
       length_cm: 280, width_cm: 160, sofa_category: 'Seater', sofa_function: 'Push back',
     });
     expect((await res.json() as { display: { sourceRequestId: unknown } }).display.sourceRequestId).toBe(RID);
+  });
+
+  it('answers a copy with the photo of the request it came from', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_launch_requests = { maybe: { id: RID, type: 'sofa', photo_updated_at: '2026-10-10T02:00:00.000Z' } };
+    state.single = { id: 'd4', venue_id: '107', type: 'sofa', name: 'Untitled sofa', modules: COPY.modules, qty: 1, is_new: true, source_request_id: RID };
+    const res = await app().request('/marketing/displays', json('POST', COPY), env);
+    expect((await res.json() as { display: { photoAt: unknown } }).display.photoAt).toBe('2026-10-10T02:00:00.000Z');
+  });
+
+  /* Owner 2026-10-10: a display card shows its request's photo beside the
+     layout, so /state says which pieces have one, and its version. */
+  it('gives each sofa on display the photo time of the request it came from', async () => {
+    meAnswers(MARKETING);
+    const at = (id: string, photo: string | null) => ({ id, type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [], photo_updated_at: photo });
+    state.tables.marketing_displays = {
+      list: [
+        { id: 'd1', venue_id: '107', type: 'sofa', modules: ['1S'], source_request_id: 'r-open' },
+        { id: 'd2', venue_id: '107', type: 'sofa', modules: ['1S'], source_request_id: 'r-arrived' },
+        { id: 'd3', venue_id: '107', type: 'sofa', modules: ['1S'], source_request_id: null },
+        { id: 'd4', venue_id: '107', type: 'mattress', modules: [], source_request_id: 'r-mattress' },
+      ],
+    };
+    // First the open requests, then the one that has arrived (no longer open).
+    state.tables.marketing_launch_requests = {
+      lists: [[at('r-open', '2026-10-10T01:00:00.000Z')], [{ id: 'r-arrived', photo_updated_at: '2026-10-08T09:00:00.000Z' }]],
+    };
+    const res = await app().request('/marketing/state', { headers: auth }, env);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { displays: Array<{ id: string; photoAt: unknown }> };
+    expect(body.displays.map((d) => [d.id, d.photoAt])).toEqual([
+      ['d1', '2026-10-10T01:00:00.000Z'], ['d2', '2026-10-08T09:00:00.000Z'], ['d3', null], ['d4', null],
+    ]);
+    // The open requests, then one batch for the arrived one — not one per piece.
+    expect(state.reads.filter((t) => t === 'marketing_launch_requests')).toHaveLength(2);
+  });
+
+  it('reads requests once when no sofa’s request has arrived', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_displays = {
+      list: [
+        { id: 'd1', venue_id: '107', type: 'sofa', modules: ['1S'], source_request_id: null },
+        { id: 'd2', venue_id: '107', type: 'sofa', modules: ['1S'], source_request_id: 'r-open' },
+      ],
+    };
+    state.tables.marketing_launch_requests = {
+      list: [{ id: 'r-open', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [], photo_updated_at: null }],
+    };
+    const res = await app().request('/marketing/state', { headers: auth }, env);
+    expect((await res.json() as { displays: Array<{ photoAt: unknown }> }).displays.map((d) => d.photoAt)).toEqual([null, null]);
+    expect(state.reads.filter((t) => t === 'marketing_launch_requests')).toHaveLength(1);
   });
 
   it('refuses a copy naming a request that is not on record, or not of its kind', async () => {
