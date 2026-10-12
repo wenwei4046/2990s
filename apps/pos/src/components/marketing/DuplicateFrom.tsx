@@ -11,7 +11,7 @@
 import { useState } from 'react';
 import { BedDouble, BedSingle, Copy, MoreHorizontal, Search, Sofa, X } from 'lucide-react';
 import {
-  missingOf, seatDepth, shapeName, specOf, typeOf, TYPES,
+  missingOf, seatDepth, shapeName, showroomLabel, specOf, typeOf, TYPES,
   type DisplayItem, type DisplayType, type DuplicateSource, type LaunchRequest,
 } from './marketing-model';
 import type { MarketingOptions } from './marketing-options';
@@ -82,16 +82,19 @@ export const DuplicateFrom = ({
   const [err, setErr] = useState('');
 
   const takes = (t: DisplayType) => types.includes(t);
-  const showroomName = (id: string) => showrooms.find((x) => x.id === id)?.name ?? 'Showroom';
+  const showroomLabelOf = (id: string) => {
+    const x = showrooms.find((y) => y.id === id);
+    return x ? showroomLabel(x) : 'Showroom';
+  };
   const here = hereId ? showrooms.find((x) => x.id === hereId) ?? null : null;
   const needle = q.trim().toLowerCase();
   const hit = (...parts: string[]) => !needle || parts.join(' ').toLowerCase().includes(needle);
 
   const reqs = requests.filter((r) => r.id && r.id !== exceptRequestId && takes(r.type) && hit(
-    r.model, r.supplierCode, r.fabric, r.colour, showroomName(r.showroomId), typeOf(r.type).label,
+    r.model, r.supplierCode, r.fabric, r.colour, showroomLabelOf(r.showroomId), typeOf(r.type).label,
     r.type === 'sofa' ? shapeName(r.modules) : r.size,
   ));
-  const pieces = displays.filter((d) => takes(d.type) && hit(d.name, d.code, d.fabric, d.colour, showroomName(d.venueId), typeOf(d.type).label, specOf(d)));
+  const pieces = displays.filter((d) => takes(d.type) && hit(d.name, d.code, d.fabric, d.colour, showroomLabelOf(d.venueId), typeOf(d.type).label, specOf(d)));
   const requestGroups = [
     { key: 'pending', title: 'Pending Info', list: reqs.filter((r) => r.status === 'pending') },
     { key: 'completed', title: 'Completed Info', list: reqs.filter((r) => r.status === 'completed') },
@@ -99,7 +102,7 @@ export const DuplicateFrom = ({
   const displayGroups = [...showrooms, ...(pieces.some((d) => !showrooms.some((x) => x.id === d.venueId)) ? [{ id: '', name: 'Showroom', area: '' }] : [])]
     .map((x) => ({
       key: x.id,
-      title: x.id === hereId ? `${x.name} · this showroom` : x.name,
+      title: x.id === hereId ? `${showroomLabel(x)} · this showroom` : showroomLabel(x),
       list: pieces
         .filter((d) => (x.id ? d.venueId === x.id : !showrooms.some((y) => y.id === d.venueId)))
         .sort((a, b) => typeRank(a.type) - typeRank(b.type)),
@@ -142,7 +145,7 @@ export const DuplicateFrom = ({
           <span className={s.dupMeta}>{meta}</span>
         </span>
         <span className={s.dupSide}>
-          <span className={s.dupWhere}>{r.action === 'replace' ? 'Replace' : 'Add'} → {showroomName(r.showroomId)}</span>
+          <span className={s.dupWhere}>{r.action === 'replace' ? 'Replace' : 'Add'} → {showroomLabelOf(r.showroomId)}</span>
           {busy === r.id
             ? <span className={s.dupBusy}>Copying…</span>
             : <span className={miss ? s.dupToFill : s.dupFilled}>{miss ? `${miss} still to fill` : 'All filled'}</span>}

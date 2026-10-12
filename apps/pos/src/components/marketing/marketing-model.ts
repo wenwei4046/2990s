@@ -36,6 +36,11 @@ export const TYPES: ReadonlyArray<{ id: DisplayType; label: string; group: strin
 
 export const typeOf = (id: string) => TYPES.find((t) => t.id === id) ?? TYPES[0]!;
 
+/** A showroom as the screens name it, with the area kept for it — '2990s Mini
+ *  — Kelana Jaya' — so 2990s Mini and 2990s Mini (II) read apart. Its name
+ *  alone while it has no area. */
+export const showroomLabel = (x: { name: string; area: string }): string => (x.area ? `${x.name} — ${x.area}` : x.name);
+
 /** What is physically on a showroom floor. */
 export interface DisplayItem {
   id: string;

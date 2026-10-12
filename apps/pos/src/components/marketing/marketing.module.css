@@ -598,7 +598,10 @@
 .reqMeta { font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .reqTruck { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--c-ink); }
 .reqTruckIcon { color: var(--c-burnt); }
-.reqTruckText { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Wraps rather than clips: with the showroom's area on it, a Replace line no
+   longer fits one line on a tablet, and the clip took the area and the piece
+   being replaced. */
+.reqTruckText { flex: 1; min-width: 0; text-wrap: balance; overflow-wrap: anywhere; }
 .reqReplaces { color: var(--fg-muted); }
 .reqTotal { font-weight: 700; white-space: nowrap; }
 .missBox {
