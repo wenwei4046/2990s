@@ -229,7 +229,7 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                     <span className={s.fieldLabel}>Showroom</span>
                     <select className={s.select} value={d.showroomId} onChange={(e) => patch({ showroomId: e.target.value })}>
                       <option value="">Choose showroom…</option>
-                      {showrooms.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                      {showrooms.map((o) => <option key={o.id} value={o.id}>{o.area ? `${o.name} — ${o.area}` : o.name}</option>)}
                     </select>
                     {showrooms.length === 0 && (
                       <span className={s.replaceHint}>No showrooms yet — add one on the Showroom display tab.</span>
