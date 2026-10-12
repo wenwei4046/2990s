@@ -4,7 +4,7 @@
 import { useState } from 'react';
 import { BedDouble, BedSingle, ClipboardCopy, ClipboardList, PackageCheck, Sofa, Trash2, Truck } from 'lucide-react';
 import {
-  blankRequest, exportText, missingOf, RM, requestTotal, seatDepth, shapeName, shortDate, typeOf, type LaunchRequest,
+  blankRequest, exportText, missingOf, RM, requestTotal, seatDepth, shapeName, shortDate, showroomLabel, typeOf, type LaunchRequest,
 } from './marketing-model';
 import { useMarketingOptions } from './marketing-options';
 import { useArriveRequest, useDeleteRequest, useRequestPhoto, type MarketingState } from '../../lib/marketing-api';
@@ -30,7 +30,10 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
   const del = useDeleteRequest();
   const arrive = useArriveRequest();
 
-  const showroomName = (id: string) => state.showrooms.find((x) => x.id === id)?.name ?? null;
+  const showroomLabelOf = (id: string) => {
+    const x = state.showrooms.find((y) => y.id === id);
+    return x ? showroomLabel(x) : null;
+  };
   const displayOf = (id: string | null) => (id ? state.displays.find((d) => d.id === id) ?? null : null);
 
   /** Open a saved request in the form. A Replace whose piece is unset (or no
@@ -53,7 +56,7 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
     try {
       const res = await arrive.mutateAsync(r.id);
       const old = res.removedName;
-      toast(`${r.model} is now on display at ${showroomName(r.showroomId) ?? 'the showroom'}${old ? ` · ${old} removed` : ''}`);
+      toast(`${r.model} is now on display at ${showroomLabelOf(r.showroomId) ?? 'the showroom'}${old ? ` · ${old} removed` : ''}`);
     } catch (e) {
       toast(`Not arrived — ${(e as Error).message}`);
     }
@@ -108,7 +111,7 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
         <div className={s.reqTruck}>
           <Truck size={14} strokeWidth={1.75} className={`${s.icon} ${s.reqTruckIcon}`} />
           <span className={s.reqTruckText}>
-            <b>{r.action === 'replace' ? 'Replace' : 'Add'}</b> → {showroomName(r.showroomId) ?? '—'}
+            <b>{r.action === 'replace' ? 'Replace' : 'Add'}</b> → {showroomLabelOf(r.showroomId) ?? '—'}
             {rep && <span className={s.reqReplaces}> · replaces {rep.name}</span>}
           </span>
           {r.type === 'sofa' && r.rows.length > 0 && <span className={s.reqTotal}>{RM(requestTotal(r))}</span>}
@@ -223,7 +226,7 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
       {exportReq && (
         <ExportModal
           initial={exportText(exportReq, {
-            showroomName: showroomName(exportReq.showroomId),
+            showroomName: showroomLabelOf(exportReq.showroomId),
             replaceItem: displayOf(exportReq.replaceId),
             moduleLabel: opts.moduleLabel,
           })}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   blankRequest, cmOf, detailRows, displayCopyFrom, exportText, inch, missingOf, photoSourceOf, preparedFromDataUrl,
-  requestFieldsFrom, RM, saveBlockersOf, saveMissingOf, shapeName, sizeText, specOf, tagsOf, type DisplayItem,
+  requestFieldsFrom, RM, saveBlockersOf, saveMissingOf, shapeName, showroomLabel, sizeText, specOf, tagsOf, type DisplayItem,
   type LaunchRequest,
 } from './marketing-model';
 
@@ -64,6 +64,10 @@ describe('formatting', () => {
   it('inch keeps blanks blank', () => {
     expect(inch('12')).toBe('12"');
     expect(inch('')).toBe('');
+  });
+  it('showroomLabel adds the area, and is the name alone without one', () => {
+    expect(showroomLabel({ name: '2990s Mini (II)', area: 'Puchong' })).toBe('2990s Mini (II) — Puchong');
+    expect(showroomLabel({ name: '2990s Mini', area: '' })).toBe('2990s Mini');
   });
 });
 

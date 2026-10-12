@@ -14,7 +14,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { ImageUp, Pencil, Upload, X } from 'lucide-react';
 import {
   cmOf, compLine, hasPhoto, missingOf, photoSourceOf, preparedFromDataUrl, requestFieldsFrom, RM, requestTotal,
-  saveBlockersOf, saveMissingOf, seatDepth, shapeName, specOf, TYPES,
+  saveBlockersOf, saveMissingOf, seatDepth, shapeName, showroomLabel, specOf, TYPES,
   type DisplayItem, type DuplicateSource, type LaunchRequest, type RequestStatus, type RequestType,
 } from './marketing-model';
 import { coloursOf, withValue, type MarketingOptions } from './marketing-options';
@@ -229,7 +229,7 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                     <span className={s.fieldLabel}>Showroom</span>
                     <select className={s.select} value={d.showroomId} onChange={(e) => patch({ showroomId: e.target.value })}>
                       <option value="">Choose showroom…</option>
-                      {showrooms.map((o) => <option key={o.id} value={o.id}>{o.area ? `${o.name} — ${o.area}` : o.name}</option>)}
+                      {showrooms.map((o) => <option key={o.id} value={o.id}>{showroomLabel(o)}</option>)}
                     </select>
                     {showrooms.length === 0 && (
                       <span className={s.replaceHint}>No showrooms yet — add one on the Showroom display tab.</span>
