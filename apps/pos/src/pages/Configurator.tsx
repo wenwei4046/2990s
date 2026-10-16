@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Link, useBeforeUnload, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Package, Trash2, FlipHorizontal2, Gift } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, resolveFabricTierOverride, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, campaignsCoveringLine, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
+import { fmtRM, BUNDLES, analyzeSofa, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, resolveFabricTierOverride, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, campaignsCoveringLine, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
 import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
 import { usePwpRules, useMyReservedPwpCodes, validatePwpCode } from '../lib/products/pwp-queries';
 import {
@@ -51,7 +51,9 @@ import {
 /* TBC sofa exchange (Loo 2026-06-12) — "Confirm Change" marshals the build
    exactly like the handover does and replaces the SO build server-side. */
 import { fetchItemCodeMap, cartLinesToSoItems } from '../lib/pos-handover-so';
+import { accessoriesStillNeeded, orderPieceCounts } from '../lib/sofa-accessories';
 import {
+  useSoAccessoryPieces,
   useSoHeaderForAdd,
   useAddProductToPlacedSo,
   useRedeemablePwpCodesForOrder,
@@ -1200,6 +1202,29 @@ export const Configurator = () => {
     () => (effectiveQPModules ? cellsFromComboModules(effectiveQPModules, activeDepth) : []),
     [effectiveQPModules, activeDepth],
   );
+  // Sofa Accessories each sofa of this Model must carry before it is ordered
+  // (Modular › Needed to order, owner 2026-10-16). Pieces go on only in
+  // Customize on a new order; an exchange keeps the order's other lines, so the
+  // pieces already on it count. Hoisted above the guard (Rules of Hooks).
+  const swapPiecesQ = useSoAccessoryPieces(isSwapMode ? swapDoc ?? undefined : undefined);
+  const orderPieces = useMemo(
+    () => (isSwapMode && swapPiecesQ.data ? orderPieceCounts(swapPiecesQ.data, sofaCustomizer.data?.accessories ?? []) : null),
+    [isSwapMode, swapPiecesQ.data, sofaCustomizer.data],
+  );
+  // Quick Pick adds no pieces, so a layout the rule wants them on is refused.
+  // A saved layout's arms are read off its cells; a bundle preset has its own.
+  const qpStillNeeded = useMemo(() => {
+    const needed = sofaCustomizer.data?.accessoriesNeeded ?? null;
+    if (!needed) return null;
+    const ends = qpCells.length > 0 ? analyzeSofa(qpCells, activeDepth) : null;
+    return accessoriesStillNeeded(needed, {
+      armEachEnd: (ends ? ends.leftArm && ends.rightArm : true) || (orderPieces?.arms ?? 0) >= 2,
+      backCushion: (orderPieces?.backCushions ?? 0) >= 1,
+    });
+  }, [sofaCustomizer.data, qpCells, activeDepth, orderPieces]);
+  // An exchange that can't keep its pieces waits for the order's lines.
+  const piecesLoading = isSwapMode && !!sofaCustomizer.data?.accessoriesNeeded && swapPiecesQ.isLoading;
+
   // Quick-Pick fabric-tier override — resolve against the build's OWN cells so a
   // compartment override (migration 0184, e.g. CNR = Price-2 +RM250) lifts the
   // chip + stored Δ to match the server recompute. modelFabricOverride (above)
@@ -1957,7 +1982,8 @@ export const Configurator = () => {
   // reach production unconfirmed.
   const canAddSofa =
     ((pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null) ||
-     (pickedQP != null && qpPickPrice > 0));
+     (pickedQP != null && qpPickPrice > 0))
+    && !qpStillNeeded && !piecesLoading;
 
   // Bundle Quick Pick → Add to Cart.
   const handleAddSofa = () => {
@@ -2354,6 +2380,28 @@ export const Configurator = () => {
         {swapError}
       </div>
     )}
+    {/* Quick Pick adds no Sofa Accessories: a layout this Model's sofas must
+        carry pieces on (Modular › Needed to order) is refused, and this says
+        where they can go on. */}
+    {isSofa && mode === 'quick' && (pickedQP != null || pickedSofaRow != null) && qpStillNeeded && (
+      <div
+        role="status"
+        className={noticeClass}
+        style={{
+          position: 'fixed', left: '50%', transform: 'translateX(-50%)',
+          zIndex: 60, maxWidth: 620, padding: '10px 16px', borderRadius: 12,
+          background: '#fff', border: '1px solid #b3261e', color: '#b3261e',
+          fontFamily: 'var(--font-sans)', fontSize: 13, boxShadow: '0 4px 14px rgba(34,31,32,0.12)',
+        }}
+      >
+        {qpStillNeeded}
+        {isSwapMode
+          ? ' — this order doesn’t have them, and pieces can only be added on a new order.'
+          : isAddToOrderMode
+            ? ' — pieces can only be added on a new order.'
+            : ' — switch to Customize to add them.'}
+      </div>
+    )}
     {/* Add-to-placed-SO — eligibility notice (not eligible) + error surface. */}
     {isAddToOrderMode && soHeaderQ.isLoading && (
       <div
@@ -2554,7 +2602,7 @@ export const Configurator = () => {
             extraAddonNote={lineExtraNote}
             extraAmountRm={effectiveExtraRm}
             onAdded={() => navigateAfterSave(isEditing ? '/cart' : '/catalog')}
-            {...(isSwapMode ? { onSwapConfirm: (snap) => { void confirmSwap(snap); }, swapPending } : {})}
+            {...(isSwapMode ? { onSwapConfirm: (snap) => { void confirmSwap(snap); }, swapPending, orderPieces } : {})}
             {...(isAddToOrderMode ? { onAddToOrderConfirm: (snap) => { void confirmAddToOrder(snap); }, addToOrderPending, addEligible: soHeader?.addEligible ?? true } : {})}
           />
         )

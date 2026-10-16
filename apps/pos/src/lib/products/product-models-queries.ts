@@ -5,7 +5,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { MfgCategory } from './mfg-products-queries';
-import type { SofaAccessoryPlacement } from '../sofa-accessories';
+import type { SofaAccessoriesNeeded, SofaAccessoryPlacement } from '../sofa-accessories';
 
 import { authedFetch } from '../apiClient';
 
@@ -44,6 +44,9 @@ export type AllowedOptions = {
   /** SOFA only — Sofa Accessory MODEL ids offered on this Model's canvas
    *  (owner 2026-10-16, lib/sofa-accessories.ts). */
   sofa_accessories?:      string[];
+  /** SOFA only — what each sofa must carry before it can be ordered; absent =
+   *  nothing (owner 2026-10-16, lib/sofa-accessories.ts). */
+  sofa_accessories_needed?: SofaAccessoriesNeeded;
   /** FABRIC_ACCESSORY only — where the piece goes on the sofa. */
   placement?:             SofaAccessoryPlacement;
 };

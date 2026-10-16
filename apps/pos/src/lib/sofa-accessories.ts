@@ -15,8 +15,10 @@
 // Which of the three a piece is lives on the accessory's Model
 // (allowed_options.placement, set in Modular); which accessories a sofa offers
 // lives on the sofa's Model (allowed_options.sofa_accessories = accessory Model
-// ids). Both keys are ours: Houzs stores allowed_options as it is sent and its
-// own screens keep keys they do not know.
+// ids), and so does what its sofas must carry before they can be ordered
+// (allowed_options.sofa_accessories_needed — nothing / full set / arm rests /
+// back cushions). All three keys are ours: Houzs stores allowed_options as it
+// is sent and its own screens keep keys they do not know.
 //
 // ON THE ORDER every accessory is its own Sales Order line — its own SKU, its
 // own selling price, its own fabric colour (the sofa's unless the salesperson
@@ -129,6 +131,67 @@ export function readAccessoryPlacement(allowedOptions: unknown): SofaAccessoryPl
 export function readSofaAccessoryIds(allowedOptions: unknown): string[] {
   const ids = (allowedOptions as { sofa_accessories?: unknown } | null | undefined)?.sofa_accessories;
   return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string' && x.length > 0) : [];
+}
+
+/** What every sofa of a Model must carry before it can be ordered —
+ *  allowed_options.sofa_accessories_needed, set in Modular (owner 2026-10-16:
+ *  "full set, or only arm rests, or only back cushions"). Absent = nothing:
+ *  an 8210 base can be ordered on its own. */
+export type SofaAccessoriesNeeded = 'full_set' | 'arms' | 'back_cushions';
+
+export const SOFA_ACCESSORIES_NEEDED: readonly SofaAccessoriesNeeded[] = ['full_set', 'arms', 'back_cushions'];
+
+export const SOFA_ACCESSORIES_NEEDED_LABEL: Record<SofaAccessoriesNeeded, string> = {
+  full_set: 'Full set',
+  arms: 'Arm rests only',
+  back_cushions: 'Back cushions only',
+};
+
+/** allowed_options.sofa_accessories_needed of a sofa Model, or null (nothing). */
+export function readSofaAccessoriesNeeded(allowedOptions: unknown): SofaAccessoriesNeeded | null {
+  const v = (allowedOptions as { sofa_accessories_needed?: unknown } | null | undefined)?.sofa_accessories_needed;
+  return SOFA_ACCESSORIES_NEEDED.find((x) => x === v) ?? null;
+}
+
+/** What one sofa has toward its Model's rule: an arm at each end (built in or
+ *  clipped on), and at least one back cushion. */
+export interface AccessoriesHave { armEachEnd: boolean; backCushion: boolean }
+
+/** What one sofa still lacks under its Model's rule, or null when it can be
+ *  ordered. Every path that orders a sofa asks this — the Custom canvas, Quick
+ *  Pick, adding to a placed order and a sofa exchange (owner 2026-10-16). */
+export function accessoriesStillNeeded(needed: SofaAccessoriesNeeded | null, have: AccessoriesHave): string | null {
+  if (!needed) return null;
+  const arms = needed !== 'back_cushions' && !have.armEachEnd;
+  const back = needed !== 'arms' && !have.backCushion;
+  if (arms && back) return 'Needs arm rests and a back cushion';
+  if (arms) return 'Needs an arm rest at each end';
+  if (back) return 'Needs a back cushion';
+  return null;
+}
+
+/** Whether a back cushion is on one of these modules. */
+export function hasBackCushion(group: readonly Cell[], placed: readonly PlacedAccessory[], options: OptionsById): boolean {
+  const ids = new Set(group.map((c) => c.id));
+  return placed.some((p) => ids.has(p.cellId) && options.get(p.modelId)?.role === 'back');
+}
+
+/** The pieces already on a placed order, by role. A sofa exchange keeps the
+ *  order's other lines, so these still count toward the new sofa's rule. A
+ *  line's role is its Model's (by code, from the accessories this sofa Model
+ *  offers), else read off its name. */
+export function orderPieceCounts(
+  lines: ReadonlyArray<{ code: string; description: string; qty: number }>,
+  offered: ReadonlyArray<Pick<SofaAccessoryOption, 'code' | 'role'>>,
+): { arms: number; backCushions: number } {
+  let arms = 0;
+  let backCushions = 0;
+  for (const l of lines) {
+    const role = offered.find((o) => o.code === l.code)?.role ?? guessAccessoryRole(l.description, l.code);
+    if (role === 'arm') arms += l.qty;
+    else if (role === 'back') backCushions += l.qty;
+  }
+  return { arms, backCushions };
 }
 
 export const isPriced = (o: Pick<SofaAccessoryOption, 'priceSen'>): boolean =>

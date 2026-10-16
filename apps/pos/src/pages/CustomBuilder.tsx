@@ -46,11 +46,13 @@ import { useMediaQuery } from '../hooks/useMediaQuery';
 import { SofaAccessoryArt } from '../components/SofaAccessoryArt';
 import {
   SOFA_ACCESSORY_ROLE_LABEL,
+  accessoriesStillNeeded,
   accessoriesTotalSen,
   accessoryLines,
   accessoryRects,
   boundsWithArms,
   extraArmsOf,
+  hasBackCushion,
   isPriced,
   moveAccessory,
   nearestSlotFor,
@@ -341,6 +343,9 @@ interface CustomBuilderProps {
   /** Sofa Accessory pieces of the cart line being edited (its config.accessories),
    *  put back on the canvas once its modules are. lib/sofa-accessories.ts. */
   initialAccessories?: PlacedAccessory[];
+  /** Exchange only: the pieces already on the order, which it keeps — they
+   *  count toward the Model's "Needed to order" rule (orderPieceCounts). */
+  orderPieces?: { arms: number; backCushions: number } | null;
 }
 
 /** An accessory's price for the palette: whole ringgit like the modules, with
@@ -370,7 +375,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly, initialAccessories }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly, initialAccessories, orderPieces = null }: CustomBuilderProps) => {
   const isPhone = useMediaQuery('(max-width: 767px)');
   const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
   const paletteRef = useRef<HTMLDialogElement>(null);
@@ -1053,6 +1058,29 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   }, [analyses]);
 
   const allClosed = analyses.every((a) => a.closed);
+  // What this Model's sofas must carry before they can be ordered — Modular ›
+  // Needed to order (owner 2026-10-16): nothing, a full set, arm rests only or
+  // back cushions only. Selling only, like the pieces themselves: Marketing's
+  // layout, a TBC exchange and an add to a placed order have none to add.
+  // Checked on every path that orders a sofa (not Marketing's layout). Pieces
+  // can be added only here, on a new order; an exchange also counts the pieces
+  // already on the order, which it keeps (`orderPieces`).
+  const accessoriesNeeded = layoutOnly ? null : modelCustomizer?.accessoriesNeeded ?? null;
+  const stillNeeded = useMemo(() => {
+    for (const a of analyses) {
+      if (!a.group.some((c) => !isAccessoryModule(c.moduleId))) continue; // a stool on its own
+      const reason = accessoriesStillNeeded(accessoriesNeeded, {
+        armEachEnd: (a.leftArm && a.rightArm) || (orderPieces?.arms ?? 0) >= 2,
+        backCushion: hasBackCushion(a.group, accessories, accessoryById) || (orderPieces?.backCushions ?? 0) >= 1,
+      });
+      if (reason) return reason;
+    }
+    return null;
+  }, [analyses, accessoriesNeeded, accessories, accessoryById, orderPieces]);
+  // Where the missing pieces can be added, when not on this canvas.
+  const stillNeededWhere = !stillNeeded || accessoriesOn ? null
+    : onSwapConfirm ? 'this order doesn’t have them, and pieces can only be added on a new order.'
+      : 'pieces can only be added on a new order.';
   // Fabric + colour — required before Add-to-Cart; the tier Δ folds onto each
   // sofa line. Fabrics are a SERIES/COLOUR library synced from the Backend
   // Fabric Converter (migration 0127). mfg sofas read the Model's enabled colour
@@ -1133,7 +1161,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   const unpricedPieces = useMemo(() => unpricedAccessories(accessories, accessoryById), [accessories, accessoryById]);
   // Pieces on the canvas, in ringgit — added to the Total, sold as their own lines.
   const accessoriesRm = accessoriesTotalSen(accessories, accessoryById) / 100;
-  const canAdd = cells.length > 0 && allClosed && unpricedPieces.length === 0
+  const canAdd = cells.length > 0 && allClosed && !stillNeeded && unpricedPieces.length === 0
     && (!onSwapConfirm || effectiveBuildCount === 1)
     && (!onAddToOrderConfirm || effectiveBuildCount === 1);
 
@@ -1566,6 +1594,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
               <span className={styles.notMatchPill}>
                 {analyses.find((a) => !a.closed)?.reason ?? 'Not closed'}
               </span>
+            )}
+            {allClosed && stillNeeded && (
+              <span className={styles.notMatchPill}>{stillNeeded}{stillNeededWhere ? ` — ${stillNeededWhere}` : ''}</span>
             )}
             {unpricedPieces.length > 0 && (
               <span className={styles.notMatchPill}>
@@ -2305,6 +2336,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 ? 'Add modules to start'
                 : !allClosed
                   ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
+                  : stillNeeded
+                    ? `Resolve · ${stillNeeded}`
                   : (onSwapConfirm || onAddToOrderConfirm) && priceResult.groups.length !== 1
                     ? (onSwapConfirm ? 'One sofa per exchange' : 'One sofa at a time')
                     : onSwapConfirm

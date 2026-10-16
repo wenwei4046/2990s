@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeSofa, type Cell } from '@2990s/shared';
 import {
+  accessoriesStillNeeded,
   accessoriesTotalSen,
   accessoryLines,
   accessoryRects,
   boundsWithArms,
   extraArmsOf,
   guessAccessoryRole,
+  hasBackCushion,
   moveAccessory,
   nearestSlotFor,
   nextSlotFor,
+  orderPieceCounts,
   pruneAccessories,
   readAccessoryPlacement,
+  readSofaAccessoriesNeeded,
   readSofaAccessoryIds,
   remapAccessories,
   unpricedAccessories,
@@ -60,6 +64,48 @@ describe('reading the Model settings', () => {
     expect(readAccessoryPlacement(null)).toBeNull();
     expect(readSofaAccessoryIds({ sofa_accessories: ['m1', '', 3, 'm2'] })).toEqual(['m1', 'm2']);
     expect(readSofaAccessoryIds({})).toEqual([]);
+  });
+
+  it('reads what a sofa must carry to be ordered; anything else is nothing', () => {
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'full_set' })).toBe('full_set');
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'back_cushions' })).toBe('back_cushions');
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'everything' })).toBeNull();
+    expect(readSofaAccessoriesNeeded({})).toBeNull();
+  });
+});
+
+describe('what a sofa must carry to be ordered', () => {
+  const none = { armEachEnd: false, backCushion: false };
+  it('nothing needed: always fine', () => {
+    expect(accessoriesStillNeeded(null, none)).toBeNull();
+  });
+
+  it('says what is missing for each rule', () => {
+    expect(accessoriesStillNeeded('full_set', none)).toBe('Needs arm rests and a back cushion');
+    expect(accessoriesStillNeeded('full_set', { armEachEnd: true, backCushion: false })).toBe('Needs a back cushion');
+    expect(accessoriesStillNeeded('full_set', { armEachEnd: true, backCushion: true })).toBeNull();
+    expect(accessoriesStillNeeded('arms', { armEachEnd: false, backCushion: true })).toBe('Needs an arm rest at each end');
+    expect(accessoriesStillNeeded('arms', { armEachEnd: true, backCushion: false })).toBeNull();
+    expect(accessoriesStillNeeded('back_cushions', { armEachEnd: false, backCushion: true })).toBeNull();
+    expect(accessoriesStillNeeded('back_cushions', { armEachEnd: true, backCushion: false })).toBe('Needs a back cushion');
+  });
+
+  it('a back cushion counts only on the sofa it sits on', () => {
+    const placed = [piece('bc06', 'a', 0), piece('ar01', 'b', 2)];
+    expect(hasBackCushion([armless[0]!], placed, options)).toBe(true);
+    expect(hasBackCushion([armless[1]!], placed, options)).toBe(false);
+  });
+
+  it('counts the pieces already on an order by role, by code or else by name', () => {
+    const lines = [
+      { code: 'AR01', description: 'ARM REST 01', qty: 2 },
+      { code: 'BC06', description: 'BACK CUSHION 06', qty: 3 },
+      { code: 'SB01', description: 'SAND BACK 01', qty: 1 },
+      { code: 'XX9', description: 'Odd piece', qty: 1 },
+    ];
+    expect(orderPieceCounts(lines, [])).toEqual({ arms: 2, backCushions: 4 });
+    // the Model's own setting wins over the name
+    expect(orderPieceCounts(lines, [{ code: 'XX9', role: 'arm' }])).toEqual({ arms: 3, backCushions: 3 });
   });
 });
 
