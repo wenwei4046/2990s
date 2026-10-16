@@ -52,11 +52,11 @@ import {
   accessoryRects,
   boundsWithArms,
   extraArmsOf,
-  hasBackCushion,
   isPriced,
   moveAccessory,
   nearestSlotFor,
   nextSlotFor,
+  orderHave,
   pruneAccessories,
   remapAccessories,
   unpricedAccessories,
@@ -343,9 +343,10 @@ interface CustomBuilderProps {
   /** Sofa Accessory pieces of the cart line being edited (its config.accessories),
    *  put back on the canvas once its modules are. lib/sofa-accessories.ts. */
   initialAccessories?: PlacedAccessory[];
-  /** Exchange only: the pieces already on the order, which it keeps — they
-   *  count toward the Model's "Needed to order" rule (orderPieceCounts). */
-  orderPieces?: { arms: number; backCushions: number } | null;
+  /** Exchange only: the pieces already on the order, by accessory Model, which
+   *  it keeps — they count toward the Model's "Needed to order" rule
+   *  (orderPiecesByModel). */
+  orderPieces?: ReadonlyMap<string, number> | null;
 }
 
 /** An accessory's price for the palette: whole ringgit like the modules, with
@@ -1059,24 +1060,34 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
 
   const allClosed = analyses.every((a) => a.closed);
   // What this Model's sofas must carry before they can be ordered — Modular ›
-  // Needed to order (owner 2026-10-16): nothing, a full set, arm rests only or
-  // back cushions only. Selling only, like the pieces themselves: Marketing's
-  // layout, a TBC exchange and an add to a placed order have none to add.
-  // Checked on every path that orders a sofa (not Marketing's layout). Pieces
-  // can be added only here, on a new order; an exchange also counts the pieces
-  // already on the order, which it keeps (`orderPieces`).
-  const accessoriesNeeded = layoutOnly ? null : modelCustomizer?.accessoriesNeeded ?? null;
+  // Needed to order (owner 2026-10-16): pieces ticked from the same list as
+  // "Sofa accessories". Checked on every path that orders a sofa (not
+  // Marketing's layout). Pieces can be added only here, on a new order; an
+  // exchange also counts the pieces already on the order, which it keeps
+  // (`orderPieces`).
+  const accessoriesNeeded = useMemo(
+    () => (layoutOnly ? [] : modelCustomizer?.accessoriesNeeded ?? []),
+    [layoutOnly, modelCustomizer],
+  );
   const stillNeeded = useMemo(() => {
+    if (accessoriesNeeded.length === 0) return null;
+    const armIds = new Set(accessoriesNeeded.filter((n) => n.role === 'arm').map((n) => n.modelId));
+    // A clipped-on arm counts only if it is one of the needed arm rests; an arm
+    // built into the module always does.
+    const neededArms = extraArmsOf(accessories.filter((p) => armIds.has(p.modelId)), cells, accessoryById);
+    const fromOrder = orderHave(accessoriesNeeded, orderPieces);
     for (const a of analyses) {
       if (!a.group.some((c) => !isAccessoryModule(c.moduleId))) continue; // a stool on its own
+      const ends = armIds.size > 0 ? analyzeSofa(a.group, depth, { extraArms: neededArms }) : a;
+      const ids = new Set(a.group.map((c) => c.id));
       const reason = accessoriesStillNeeded(accessoriesNeeded, {
-        armEachEnd: (a.leftArm && a.rightArm) || (orderPieces?.arms ?? 0) >= 2,
-        backCushion: hasBackCushion(a.group, accessories, accessoryById) || (orderPieces?.backCushions ?? 0) >= 1,
+        armEachEnd: (ends.leftArm && ends.rightArm) || fromOrder.arms >= 2,
+        pieces: new Set([...accessories.filter((p) => ids.has(p.cellId)).map((p) => p.modelId), ...fromOrder.pieces]),
       });
       if (reason) return reason;
     }
     return null;
-  }, [analyses, accessoriesNeeded, accessories, accessoryById, orderPieces]);
+  }, [analyses, accessoriesNeeded, accessories, accessoryById, cells, depth, orderPieces]);
   // Where the missing pieces can be added, when not on this canvas.
   const stillNeededWhere = !stillNeeded || accessoriesOn ? null
     : onSwapConfirm ? 'this order doesn’t have them, and pieces can only be added on a new order.'
@@ -1596,7 +1607,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
               </span>
             )}
             {allClosed && stillNeeded && (
-              <span className={styles.notMatchPill}>{stillNeeded}{stillNeededWhere ? ` — ${stillNeededWhere}` : ''}</span>
+              <span className={styles.notMatchPill}>{stillNeeded.full}{stillNeededWhere ? ` — ${stillNeededWhere}` : ''}</span>
             )}
             {unpricedPieces.length > 0 && (
               <span className={styles.notMatchPill}>
@@ -2337,7 +2348,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 : !allClosed
                   ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
                   : stillNeeded
-                    ? `Resolve · ${stillNeeded}`
+                    ? `Resolve · ${stillNeeded.short}`
                   : (onSwapConfirm || onAddToOrderConfirm) && priceResult.groups.length !== 1
                     ? (onSwapConfirm ? 'One sofa per exchange' : 'One sofa at a time')
                     : onSwapConfirm
