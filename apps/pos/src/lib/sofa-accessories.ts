@@ -15,8 +15,8 @@
 // Which of the three a piece is lives on the accessory's Model
 // (allowed_options.placement, set in Modular); which accessories a sofa offers
 // lives on the sofa's Model (allowed_options.sofa_accessories = accessory Model
-// ids), and so do the ones its sofas must carry before they can be ordered
-// (allowed_options.sofa_accessories_needed — ids ticked from the same list).
+// ids), and so do the kinds its sofas must carry before they can be ordered
+// (allowed_options.sofa_accessories_needed — kinds, out of those it offers).
 // All three keys are ours: Houzs stores allowed_options as it is sent and its
 // own screens keep keys they do not know.
 //
@@ -133,22 +133,48 @@ export function readSofaAccessoryIds(allowedOptions: unknown): string[] {
   return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string' && x.length > 0) : [];
 }
 
-/** The accessories every sofa of a Model must carry before it can be ordered —
- *  allowed_options.sofa_accessories_needed: accessory Model ids, ticked in
- *  Modular from the same list as "Sofa accessories" and kept in step with it
- *  (owner 2026-10-16: tick arm rest, or arm rest and back cushion, or back
- *  cushion and sand back). Only what the Model offers counts. Pieces of one
- *  kind ticked together are alternatives — either back cushion will do. #818
- *  stored a word instead ('full_set' / 'arms' / 'back_cushions'); it reads as
- *  the offered pieces of those kinds. */
-export function readSofaAccessoriesNeeded<T extends { modelId: string; role: SofaAccessoryRole }>(
+/** The kinds a sofa Model can ask for, in the order "Needed to order" shows
+ *  them and the rule's messages name them. */
+const NEEDED_KINDS: ReadonlyArray<{ role: SofaAccessoryRole; word: string; phrase: string }> = [
+  { role: 'arm', word: 'arm rests', phrase: 'an arm rest at each end' },
+  { role: 'back', word: 'back cushion', phrase: 'a back cushion' },
+  { role: 'back-support', word: 'back support', phrase: 'a back support' },
+];
+
+/** "Needed to order" names a kind as the rule reads: an arm built into the
+ *  sofa counts too, so it is an arm rest, not an extra arm. */
+export const NEEDED_KIND_LABEL: Record<SofaAccessoryRole, string> = {
+  arm: 'Arm rest',
+  back: 'Back cushion',
+  'back-support': 'Back support',
+};
+
+const isAccessoryRole = (x: unknown): x is SofaAccessoryRole =>
+  x === 'back' || x === 'back-support' || x === 'arm';
+
+/** The kinds among some accessories, in NEEDED_KINDS order — what "Needed to
+ *  order" offers for the accessories a sofa Model offers. */
+export function neededKindsOf(pieces: ReadonlyArray<{ role: SofaAccessoryRole }>): SofaAccessoryRole[] {
+  return NEEDED_KINDS.filter((k) => pieces.some((p) => p.role === k.role)).map((k) => k.role);
+}
+
+/** The kinds every sofa of a Model must carry before it can be ordered —
+ *  allowed_options.sofa_accessories_needed, ticked in Modular by kind (owner
+ *  2026-10-16: arm rest, back cushion and sand back, "by category, not by its
+ *  SKU"). Any piece of a needed kind the Model offers will do. Only kinds it
+ *  offers count, so this stays in step with "Sofa accessories": untick the last
+ *  piece of a kind there and the kind goes. Earlier saves still read: #819
+ *  stored accessory Model ids (each reads as its piece's kind), #818 a word
+ *  ('full_set' / 'arms' / 'back_cushions'). In NEEDED_KINDS order. */
+export function readSofaAccessoriesNeeded(
   allowedOptions: unknown,
-  offered: readonly T[],
-): T[] {
+  offered: ReadonlyArray<{ modelId: string; role: SofaAccessoryRole }>,
+): SofaAccessoryRole[] {
   const v = (allowedOptions as { sofa_accessories_needed?: unknown } | null | undefined)?.sofa_accessories_needed;
-  if (Array.isArray(v)) return offered.filter((o) => v.includes(o.modelId));
-  const kinds: SofaAccessoryRole[] = v === 'full_set' ? ['arm', 'back'] : v === 'arms' ? ['arm'] : v === 'back_cushions' ? ['back'] : [];
-  return offered.filter((o) => kinds.includes(o.role));
+  const ticked: SofaAccessoryRole[] = Array.isArray(v)
+    ? v.flatMap((x) => (isAccessoryRole(x) ? [x] : offered.filter((o) => o.modelId === x).map((o) => o.role)))
+    : v === 'full_set' ? ['arm', 'back'] : v === 'arms' ? ['arm'] : v === 'back_cushions' ? ['back'] : [];
+  return neededKindsOf(offered).filter((k) => ticked.includes(k));
 }
 
 /** One piece a Model's rule asks for, as the rule's messages name it. */
@@ -162,12 +188,6 @@ export interface AccessoriesHave {
   /** Accessory Model ids on the sofa (for an exchange, also on the order). */
   pieces: ReadonlySet<string>;
 }
-
-const NEEDED_KINDS: ReadonlyArray<{ role: SofaAccessoryRole; word: string; phrase: string }> = [
-  { role: 'arm', word: 'arm rests', phrase: 'an arm rest at each end' },
-  { role: 'back', word: 'back cushion', phrase: 'a back cushion' },
-  { role: 'back-support', word: 'back support', phrase: 'a back support' },
-];
 
 const listAnd = (xs: readonly string[]): string =>
   xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;

@@ -44,9 +44,11 @@ export type AllowedOptions = {
   /** SOFA only — Sofa Accessory MODEL ids offered on this Model's canvas
    *  (owner 2026-10-16, lib/sofa-accessories.ts). */
   sofa_accessories?:      string[];
-  /** SOFA only — the accessory MODEL ids (from sofa_accessories) each sofa must
-   *  carry before it can be ordered; absent = nothing. #818 stored a word here
-   *  ('full_set' / 'arms' / 'back_cushions'), still read (lib/sofa-accessories.ts). */
+  /** SOFA only — the kinds ('arm' / 'back' / 'back-support', out of those
+   *  sofa_accessories offers) each sofa must carry before it can be ordered;
+   *  absent = nothing. #819 stored accessory MODEL ids here and #818 a word
+   *  ('full_set' / 'arms' / 'back_cushions'); both still read
+   *  (lib/sofa-accessories.ts). */
   sofa_accessories_needed?: string[] | string;
   /** FABRIC_ACCESSORY only — where the piece goes on the sofa. */
   placement?:             SofaAccessoryPlacement;
