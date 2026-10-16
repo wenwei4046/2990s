@@ -571,10 +571,12 @@ onto an armless end; AR01). Engine + reasons: `apps/pos/src/lib/sofa-accessories
   screens keep them): the accessory Model's `placement` (`back` / `back-support` /
   `arm` + `armWidthCm`; until set, guessed from the name) and the sofa Model's
   `sofa_accessories` (accessory **Model ids**, so a Houzs code rename can't strand them).
-- ⚠️ **Colour KIV gap:** a piece sold with its colour KIV can't be completed from POS
-  My Orders (`TbcLineEditor` fills sofa/bedframe fabric only), and Houzs's `tbc-update`
-  copies a sofa's confirmed colour to sofa lines only — the accessory line stays KIV and
-  blocks the Processing Date until filled in Houzs ERP.
+- ⚠️ **A piece's KIV colour is filled on ITS OWN line.** POS My Orders does it since
+  2026-10-16 (`TbcLineEditor`, `isAccessory`: every active colour when the accessory's
+  Model ticks none, no tier add-on). Filling the sofa's colour does NOT reach its pieces:
+  nothing on the SO links them to the sofa, and Houzs's `tbc-update` copies a sofa's
+  confirmed colour to the sofa's own lines only. A piece left KIV blocks the Processing
+  Date.
 
 ## Sofa combos — the POS's own table inside Houzs (since 2026-09-26)
 
@@ -741,6 +743,16 @@ their recompute cannot price a build containing one. The POS lets a salesperson
 place one. This cannot be fixed from this repo — it needs the module porting
 into Houzs, or the palette entry gating off. Do not assume a headrest build
 prices correctly server-side.
+
+**Ours only, on purpose — the length-sold sofas (2026-10-16).** `7FT` / `6FT` /
+`5FT` / `4FT` (model 8210) are in our `SOFA_MODULES` and not in theirs; without
+them our Custom palette for 8210 was empty. Pricing doesn't need them over there:
+their `groupPrice` reads a cell's price by code from the Model SKU (`compRow`),
+and their order routes never call `findModule` (checked on origin/main
+`60e1631ec`). An unknown module only loses its adjacency, so each one is priced
+on its own — it would matter only if a combo spanned two of them. `fixedLength`
+(the length is the name at every seat depth) and the seat counts (7/6FT three,
+5/4FT two — an assumption until the owner confirms) live only in our copy.
 
 ---
 
