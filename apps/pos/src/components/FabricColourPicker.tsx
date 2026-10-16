@@ -1,7 +1,10 @@
 import { useMemo } from 'react';
 import { fmtRM, fabricTierAddon, type FabricTier, type FabricTierAddonConfig, type FabricTierModelOverride } from '@2990s/shared';
 import { useFabricLibrary, useFabricColours, type ProductFabricRow } from '../lib/queries';
+import { colourText } from '../lib/fabric-series-groups';
 import styles from './FabricColourPicker.module.css';
+
+// Chips show code + colour name, e.g. "CG-015 Mint" (Chairman 2026-06-03).
 
 export interface FabricSelection {
   fabricId: string;
@@ -76,11 +79,6 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
       .sort((a, b) => a.sortOrder - b.sortOrder),
     [colours.data, fabricId, enabledSet],
   );
-
-  // Show the fabric CODE + colour name, e.g. "CG-015 Mint" (Chairman 2026-06-03).
-  // BF colours carry no name (label === code) → just the code "BF-01", no double-up.
-  const colourText = (c: { colourId: string; label: string }) =>
-    c.label && c.label !== c.colourId ? `${c.colourId} ${c.label}` : c.colourId;
 
   const pick = (fId: string, cId: string) => {
     const f = fabrics.find((x) => x.id === fId);
