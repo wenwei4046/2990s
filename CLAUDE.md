@@ -574,8 +574,13 @@ extra arm (clips onto an armless end; AR01). Engine + reasons:
   `arm` + `armWidthCm`; until set, guessed from the name), the sofa Model's
   `sofa_accessories` (accessory **Model ids**, so a Houzs code rename can't strand them),
   and the sofa Model's `sofa_accessories_needed` — Modular › **Needed to order**
-  (owner 2026-10-16): absent = nothing, `full_set` (an arm at each end + ≥1 back
-  cushion), `arms`, `back_cushions`. An arm built into a module counts.
+  (owner 2026-10-16): accessory Model ids ticked from the SAME list as Sofa
+  accessories ("supposed to be synchronized" — unticking one above drops it here).
+  Every sofa must carry each ticked kind: arm rest = an arm at each end (one built in
+  counts; a clipped-on arm only if it is a ticked one), back cushion / back support =
+  at least one of the ticked ones — ticked pieces of one kind are alternatives. #818
+  briefly stored a word (`full_set` / `arms` / `back_cushions`); it still reads as the
+  offered pieces of those kinds.
 - 🔑 **"Needed to order" is checked on EVERY path that orders a sofa** (owner: "need
   follow as well"), via `accessoriesStillNeeded`: the Custom canvas, **Quick Pick**,
   **Add to this order** and the **sofa exchange** (Confirm Change). Pieces can only be
