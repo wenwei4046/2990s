@@ -175,8 +175,12 @@ const fam = (m: string): string => {
   return f === '1B' ? '1A' : f === '2B' ? '2A' : f;
 };
 
-/** Whole-piece seaters — a single compartment that is the whole sofa. */
-const WHOLE_PIECE: Readonly<Record<string, string>> = { '1S': '1-Seater', '2S': '2-Seater', '3S': '3-Seater' };
+/** Whole-piece seaters — a single compartment that is the whole sofa. The
+ *  length-sold ones (8210's 7FT…4FT) go by the length they are sold as. */
+const WHOLE_PIECE: Readonly<Record<string, string>> = {
+  '1S': '1-Seater', '2S': '2-Seater', '3S': '3-Seater',
+  '7FT': '7FT sofa', '6FT': '6FT sofa', '5FT': '5FT sofa', '4FT': '4FT sofa',
+};
 
 /** A stool, console or headrest is bought with a sofa but is not part of it. */
 export const isSofaAccessory = (m: string): boolean => isAccessoryModule(normalizeCompartmentCode(m));

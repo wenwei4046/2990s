@@ -255,6 +255,27 @@ describe('STOOL accessory module', () => {
   });
 });
 
+describe('length-sold sofas (8210: 7FT / 6FT / 5FT / 4FT)', () => {
+  it('are whole units at the length they are sold as, at every seat depth', () => {
+    const want: Record<string, [number, number]> = { '7FT': [213, 3], '6FT': [183, 3], '5FT': [152, 2], '4FT': [122, 2] };
+    for (const [id, [cm, seats]] of Object.entries(want)) {
+      const m = findModule(id)!;
+      expect(m.cushions).toBe(seats);
+      expect(moduleFootprint(m, 0, '24').w).toBe(cm);
+      expect(moduleFootprint(m, 0, '32').w).toBe(cm); // a 3S would grow 60cm here
+      expect(moduleFootprint(m, 90, '28')).toEqual({ w: 95, h: cm });
+    }
+  });
+
+  it('close on their own (an arm each end) and draw with their own art', () => {
+    const lone: Cell[] = [{ id: 'a', moduleId: '7FT', x: 0, y: 0, rot: 0 }];
+    expect(analyzeSofa(lone, '24').closed).toBe(true);
+    expect(representativeArtCode('6FT')).toBe('6FT');
+    // a renamed variant keeps the family's shape
+    expect(findModule('5FT(EXTEND)')?.w).toBe(152);
+  });
+});
+
 /* F5: depth widened beyond 24/28. Plan-view width grows 2.5cm per inch per
  * cushion, anchored on the existing 24″=base / 28″=+10cm/cushion behaviour. */
 describe('moduleFootprint depth scaling', () => {

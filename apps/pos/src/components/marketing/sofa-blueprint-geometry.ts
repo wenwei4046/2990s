@@ -68,6 +68,11 @@ export const BLUEPRINT_MODULES: Readonly<Record<string, BlueprintModule>> = {
   '2B(RHF)': { w: 120, h: 70, benchR: true, seams: [49] },
   '2S': { w: 120, h: 70, armL: true, armR: true, seams: [60] },
   '3S': { w: 180, h: 70, armL: true, armR: true, seams: [67, 113] },
+  // Length-sold whole units (8210, 2026-10-16) — drawn to their length.
+  '7FT': { w: 175, h: 70, armL: true, armR: true, seams: [62, 113] },
+  '6FT': { w: 150, h: 70, armL: true, armR: true, seams: [53.7, 96.3] },
+  '5FT': { w: 125, h: 70, armL: true, armR: true, seams: [62.5] },
+  '4FT': { w: 100, h: 70, armL: true, armR: true, seams: [50] },
   'CNR': { w: 60, h: 60, backL: true },
   'STOOL': { w: 47, h: 47, noBack: true },
   'WC-45': { w: 28, h: 70, noBack: true },

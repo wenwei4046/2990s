@@ -44,6 +44,9 @@ export interface SofaModuleSpec {
   d: number;
   cushions: number;
   accessory?: boolean;
+  /** Sold by its overall length (7FT, 6FT, …): the plan-view length is the
+   *  size it is sold as and does NOT grow with the seat depth. */
+  fixedLength?: boolean;
 }
 
 export interface SofaProductPricingRow {
@@ -211,6 +214,18 @@ export const SOFA_MODULES: readonly SofaModuleSpec[] = [
   { id: '1S(P)', group: '1-seater', label: '1S · Power · Both arms',     w: 115, d: 95, cushions: 1 },
   { id: '1S(R)', group: '1-seater', label: '1S · Recliner · Both arms',  w: 115, d: 95, cushions: 1 },
   { id: '1S(L)', group: '1-seater', label: '1S · Power leg · Both arms', w: 115, d: 95, cushions: 1 },
+  // Sofas sold by overall length (model 8210, owner 2026-10-16): whole units
+  // with an arm each side, like 1S/2S/3S, whose length IS the name (feet →
+  // cm) at every seat depth. Without a spec the canvas dropped them, so a
+  // Model offering only these showed an empty Custom palette. Seat counts are
+  // an assumption until the owner confirms (7/6FT three, 5/4FT two). Pricing
+  // needs no spec — both this file and Houzs's copy price a cell from its
+  // Model SKU ({MODEL}-7FT) by code. Shortest first, so the palette reads
+  // 4FT, 5FT | 6FT, 7FT across its two groups.
+  { id: '4FT', group: '2-seater', label: '4FT sofa (both arms)', w: 122, d: 95, cushions: 2, fixedLength: true },
+  { id: '5FT', group: '2-seater', label: '5FT sofa (both arms)', w: 152, d: 95, cushions: 2, fixedLength: true },
+  { id: '6FT', group: '3-seater', label: '6FT sofa (both arms)', w: 183, d: 95, cushions: 3, fixedLength: true },
+  { id: '7FT', group: '3-seater', label: '7FT sofa (both arms)', w: 213, d: 95, cushions: 3, fixedLength: true },
 ];
 
 const MODULE_BY_ID = new Map<string, SofaModuleSpec>(SOFA_MODULES.map((m) => [m.id, m]));
@@ -263,6 +278,10 @@ const familyRepresentative = (s: CompartmentStructure): string | undefined => {
     case '1S': return '1S';
     case '2S': return '2S';
     case '3S': return '3S';
+    case '7FT': return '7FT';
+    case '6FT': return '6FT';
+    case '5FT': return '5FT';
+    case '4FT': return '4FT';
     case 'CNR': return 'CNR';
     case 'CONSOLE': return 'Console';
     case 'STOOL': return 'STOOL';
@@ -874,6 +893,11 @@ const MODULE_EDGES_BASE: Record<string, [EdgeType, EdgeType, EdgeType, EdgeType]
   '1S(P)': ['arm', 'back', 'arm', 'front'],
   '1S(R)': ['arm', 'back', 'arm', 'front'],
   '1S(L)': ['arm', 'back', 'arm', 'front'],
+  // Length-sold whole units (8210) — an arm each end, like 2S/3S.
+  '7FT': ['arm', 'back', 'arm', 'front'],
+  '6FT': ['arm', 'back', 'arm', 'front'],
+  '5FT': ['arm', 'back', 'arm', 'front'],
+  '4FT': ['arm', 'back', 'arm', 'front'],
 };
 
 /** Clockwise 90° shifts [W,N,E,S] → [S,W,N,E]. */
@@ -922,7 +946,7 @@ const widthOffsetPerCushion = (depth: Depth): number => {
 };
 
 export const moduleFootprint = (m: SofaModuleSpec, rot: Rot, depth: Depth): { w: number; h: number } => {
-  const w = m.w + widthOffsetPerCushion(depth) * m.cushions;
+  const w = m.w + (m.fixedLength ? 0 : widthOffsetPerCushion(depth) * m.cushions);
   const h = m.d;
   return rot % 180 === 0 ? { w, h } : { w: h, h: w };
 };

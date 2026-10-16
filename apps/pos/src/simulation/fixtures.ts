@@ -9,6 +9,7 @@ const fabricCodes = {
   BF: Array.from({ length: 18 }, (_, i) => `BF-${String(i + 1).padStart(2, '0')}`).filter((x) => x !== 'BF-15'),
 };
 export const moduleCodes = ['1A(LHF)', '1A(RHF)', '1B(LHF)', '1B(RHF)', '1NA', '1S', '2A(LHF)', '2A(RHF)', '2NA', 'CNR', 'STOOL'];
+const lengthCodes = ['7FT', '6FT', '5FT', '4FT'];
 const gaps = Array.from({ length: 17 }, (_, i) => `${i + 4}`);
 const legs = ['No Leg', '1', '2', '4'];
 const divans = ['4', '5', '6', '8', '10', '12', '14', '16'];
@@ -25,6 +26,8 @@ export const models = [
   { ...commonModel, id: 'demo-model-back-cushion', name: 'Back cushion', model_code: 'DEMO-BC', category: 'FABRIC_ACCESSORY', description: 'Loose back cushion in the sofa fabric', allowed_options: { placement: { role: 'back' } } },
   { ...commonModel, id: 'demo-model-sand-back', name: 'Sand back', model_code: 'DEMO-SB', category: 'FABRIC_ACCESSORY', description: 'Firm support behind a back cushion', allowed_options: { placement: { role: 'back-support' } } },
   { ...commonModel, id: 'demo-model-arm', name: 'Arm rest', model_code: 'DEMO-AR', category: 'FABRIC_ACCESSORY', description: 'Clip-on arm for an armless end', allowed_options: { placement: { role: 'arm', armWidthCm: 20 } } },
+  // A sofa sold by overall length, like 8210 (7FT / 6FT / 5FT / 4FT).
+  { ...commonModel, id: 'demo-model-linea', name: 'LINEA', model_code: 'LINEA', category: 'SOFA', description: 'One piece, chosen by length.', allowed_options: { compartments: lengthCodes, sizes: ['24', '28'], fabrics: fabricCodes.CG, leg_heights: ['6'], sofa_accessories: ['demo-model-back-cushion'] } },
 ];
 const sku = (id: string, code: string, name: string, category: string, modelIndex: number, price: number, size: string | null = null, pwp: number | null = null) => ({
   id, code, name, category, model_id: models[modelIndex]!.id, base_model: models[modelIndex]!.model_code, description: models[modelIndex]!.description ?? 'Fictional demonstration product', branding: '2990', size_code: size, size_label: size === 'K' ? 'King · 183×190 cm' : size === 'Q' ? 'Queen · 152×190 cm' : null,
@@ -43,6 +46,7 @@ export const products = [
   sku('mfg-demo-back-cushion', 'DEMO-BC', 'Back cushion', 'FABRIC_ACCESSORY', 6, 13500),
   sku('mfg-demo-sand-back', 'DEMO-SB', 'Sand back', 'FABRIC_ACCESSORY', 7, 16050),
   sku('mfg-demo-arm', 'DEMO-AR', 'Arm rest', 'FABRIC_ACCESSORY', 8, 8000),
+  ...lengthCodes.map((code, i) => ({ ...sku(`mfg-demo-linea-${i}`, `LINEA-${code}`, `LINEA ${code}`, 'SOFA', 9, [329000, 299000, 259000, 229000][i]!), seat_height_prices: ['24', '28'].map((height) => ({ height, tier: 'PRICE_1', sellingPriceSen: [329000, 299000, 259000, 229000][i]! })) })),
 ];
 export const categories = [['sofa', 'Sofas', 'sofa'], ['mattress', 'Mattresses', 'bed-double'], ['bedframe', 'Bedframes', 'bed'], ['accessory', 'Accessories', 'package']].map(([id, label, icon], sortOrder) => ({ id, label, icon, tbc: false, sortOrder }));
 export const fabrics = [['CG', 'CG', 'PRICE_1'], ['EZ', 'EZ', 'PRICE_2'], ['BF', 'BF', 'PRICE_1']].map(([id, label, tier], sortOrder) => ({ id, label, tier: 'standard', defaultSurcharge: 0, active: true, sortOrder, sofaTier: tier, bedframeTier: tier }));
@@ -53,9 +57,14 @@ export const maintenance = {
   gaps, legHeights: legs.map((v) => option(v)), divanHeights: divans.map((v) => option(v, Math.max(0, Number(v) - 8) / 2 * 12500)), totalHeights: [], specials: [], sofaSpecials: [], sofaLegHeights: [option('6')], sofaSizes: ['24', '28'],
   // The master pool also carries the chaise ends, so the Marketing component
   // builder shows its 1-Seater / 2-Seater / Chaise groups. No fixture Model
-  // ticks them, so the configurator's own palette is unchanged.
-  sofaCompartments: [...moduleCodes, 'L(LHF)', 'L(RHF)'], mattressSizes: ['Q', 'K'], bedframeSizes: ['Q', 'K'], brandings: ['2990'], supplierCategories: [],
-  sofaCompartmentMeta: Object.fromEntries(moduleCodes.map((code) => [code, { description: code === 'CNR' ? 'Corner' : code === 'STOOL' ? 'Ottoman' : code }])),
+  // ticks them, so the configurator's own palette is unchanged. LINEA's
+  // length codes carry a description and no photo, as production's 8210
+  // rows do, so their art comes from the bundled seed.
+  sofaCompartments: [...moduleCodes, 'L(LHF)', 'L(RHF)', ...lengthCodes], mattressSizes: ['Q', 'K'], bedframeSizes: ['Q', 'K'], brandings: ['2990'], supplierCategories: [],
+  sofaCompartmentMeta: Object.fromEntries([
+    ...moduleCodes.map((code) => [code, { description: code === 'CNR' ? 'Corner' : code === 'STOOL' ? 'Ottoman' : code }]),
+    ...lengthCodes.map((code) => [code, { description: 'SOFA LINEA' }]),
+  ]),
 };
 export const sizeLibrary = [{ id: 'queen', label: 'Queen', widthCm: 152, lengthCm: 190, sortOrder: 0 }, { id: 'king', label: 'King', widthCm: 183, lengthCm: 190, sortOrder: 1 }];
 export const combos = [
