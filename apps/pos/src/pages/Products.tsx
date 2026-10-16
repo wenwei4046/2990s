@@ -129,14 +129,12 @@ import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/p
 import { compareProductCategories, isSingleSkuCategory, productCategoryChips, productCategoryLabel } from '../lib/products/product-categories';
 import {
   DEFAULT_ARM_WIDTH_CM,
-  SOFA_ACCESSORIES_NEEDED,
-  SOFA_ACCESSORIES_NEEDED_LABEL,
   SOFA_ACCESSORY_ROLE_LABEL,
+  describeNeeded,
   guessAccessoryRole,
   readAccessoryPlacement,
   readSofaAccessoriesNeeded,
   readSofaAccessoryIds,
-  type SofaAccessoriesNeeded,
   type SofaAccessoryPlacement,
   type SofaAccessoryRole,
 } from '../lib/sofa-accessories';
@@ -1278,15 +1276,50 @@ const ModelAllowedOptionsDrawer = ({
       .filter((a) => a.active || tickedAccessories.has(a.id))
       .map((a) => ({ id: a.id, label: a.active ? a.name : `${a.name} (off)` }))
     : [];
-  // What the ticked ones are, so "Needed to order" can say when the rule asks
-  // for a piece none of them is.
-  const tickedAccessoryRoles = new Set(
-    (accessoryModels.data ?? [])
-      .filter((a) => a.active && tickedAccessories.has(a.id))
-      .map((a) => readAccessoryPlacement(a.allowed_options)?.role ?? guessAccessoryRole(a.name, a.model_code)),
-  );
+  // Needed to order ticks from the same list (owner 2026-10-16: "supposed to be
+  // synchronized, same as the accessory table"): only the accessories ticked
+  // above show, in the same order, and unticking one above drops it here too.
+  const offeredAccessories = sofaAccessoryPool
+    .filter((a) => tickedAccessories.has(a.id))
+    .map((a) => {
+      const row = (accessoryModels.data ?? []).find((x) => x.id === a.id);
+      const role: SofaAccessoryRole = row
+        ? readAccessoryPlacement(row.allowed_options)?.role ?? guessAccessoryRole(row.name, row.model_code)
+        : 'back';
+      return { modelId: a.id, role, code: a.label };
+    });
 
   const d = draft ?? {};
+  const neededAccessories = readSofaAccessoriesNeeded(d, offeredAccessories);
+  const neededIds = new Set(neededAccessories.map((a) => a.modelId));
+  const neededHint = neededAccessories.length === 0
+    ? 'Nothing ticked — sofas can be ordered with or without accessories.'
+    : `Before it can be ordered, each sofa needs ${describeNeeded(neededAccessories)}.`
+      + (neededAccessories.some((a) => a.role === 'arm') ? ' An arm built into the sofa counts as an arm rest.' : '')
+      + (neededAccessories.some((a, i) => neededAccessories.findIndex((b) => b.role === a.role) !== i)
+        ? ' Pieces of the same kind are alternatives — any one of them will do.' : '');
+  const toggleNeeded = (id: string) => setDraft((prev) => {
+    const next: AllowedOptions = JSON.parse(JSON.stringify(prev ?? {}));
+    const cur = new Set(readSofaAccessoriesNeeded(next, offeredAccessories).map((a) => a.modelId));
+    if (cur.has(id)) cur.delete(id);
+    else cur.add(id);
+    if (cur.size > 0) next.sofa_accessories_needed = offeredAccessories.map((a) => a.modelId).filter((x) => cur.has(x));
+    else delete next.sofa_accessories_needed;
+    return next;
+  });
+  // Ticking a sofa accessory on/off; one no longer offered is no longer needed.
+  const toggleOffered = (id: string) => setDraft((prev) => {
+    const next: AllowedOptions = JSON.parse(JSON.stringify(prev ?? {}));
+    const offered = readSofaAccessoryIds(next);
+    const on = offered.includes(id);
+    next.sofa_accessories = on ? offered.filter((x) => x !== id) : [...offered, id];
+    if (on && Array.isArray(next.sofa_accessories_needed)) {
+      const left = next.sofa_accessories_needed.filter((x) => x !== id);
+      if (left.length > 0) next.sofa_accessories_needed = left;
+      else delete next.sofa_accessories_needed;
+    }
+    return next;
+  });
   const isTicked = (pool: keyof AllowedOptions, v: string): boolean => {
     const arr = d[pool] as string[] | undefined;
     return Array.isArray(arr) && arr.includes(v);
@@ -1441,18 +1474,20 @@ const ModelAllowedOptionsDrawer = ({
               pool={sofaAccessoryPool.map((a) => a.id)}
               labelOf={(id) => sofaAccessoryPool.find((a) => a.id === id)?.label ?? id}
               isTicked={(v) => isTicked('sofa_accessories', v)}
-              onToggle={(v) => toggle('sofa_accessories', v)}
+              onToggle={toggleOffered}
             />
           )}
-          {isSofa && sofaAccessoryPool.length > 0 && (
-            <AccessoriesNeededSection
-              needed={readSofaAccessoriesNeeded(d)}
-              tickedRoles={tickedAccessoryRoles}
-              onChange={(needed) => setDraft((prev) => {
-                const { sofa_accessories_needed: _old, ...rest } = prev ?? {};
-                return needed ? { ...rest, sofa_accessories_needed: needed } : rest;
-              })}
-            />
+          {isSofa && offeredAccessories.length > 0 && (
+            <div style={{ marginBottom: 'var(--space-4)' }}>
+              <AllowedOptionsSection
+                label="Needed to order"
+                pool={offeredAccessories.map((a) => a.modelId)}
+                labelOf={(id) => offeredAccessories.find((a) => a.modelId === id)?.code ?? id}
+                isTicked={(v) => neededIds.has(v)}
+                onToggle={toggleNeeded}
+              />
+              <p className={styles.eyebrow} style={{ marginTop: 'calc(-1 * var(--space-2))' }}>{neededHint}</p>
+            </div>
           )}
 
           {(isSofa || isBedframe) && (
@@ -1599,80 +1634,6 @@ const PLACEMENT_HINT: Record<SofaAccessoryRole, string> = {
   back: 'Goes along the back of the sofa, against the backrest — as many as the customer wants.',
   'back-support': 'Goes behind a back cushion, so it needs one first. One behind each cushion.',
   arm: 'Clips onto an armless end of the sofa. The sofa gets wider by its width.',
-};
-
-/* What every sofa of this Model must carry before it can be ordered (owner
-   2026-10-16) — allowed_options.sofa_accessories_needed, enforced wherever a
-   sofa is ordered (lib/sofa-accessories.ts accessoriesStillNeeded). */
-const NEEDED_HINT: Record<SofaAccessoriesNeeded | 'nothing', string> = {
-  nothing: 'Sofas can be ordered with or without accessories.',
-  full_set: 'Each sofa needs an arm rest at each end and at least one back cushion before it can be ordered.',
-  arms: 'Each sofa needs an arm rest at each end before it can be ordered. Back cushions stay optional.',
-  back_cushions: 'Each sofa needs at least one back cushion before it can be ordered. Arm rests stay optional.',
-};
-
-const AccessoriesNeededSection = ({
-  needed,
-  tickedRoles,
-  onChange,
-}: {
-  needed: SofaAccessoriesNeeded | null;
-  tickedRoles: ReadonlySet<SofaAccessoryRole>;
-  onChange: (next: SofaAccessoriesNeeded | null) => void;
-}) => {
-  const needArms = needed === 'full_set' || needed === 'arms';
-  const needBack = needed === 'full_set' || needed === 'back_cushions';
-  return (
-    <div style={{ marginBottom: 'var(--space-4)' }}>
-      <div style={{
-        fontFamily: 'var(--font-button)',
-        fontSize: 'var(--fs-12)',
-        fontWeight: 600,
-        letterSpacing: '0.08em',
-        textTransform: 'uppercase',
-        color: 'var(--fg-muted)',
-        marginBottom: 'var(--space-2)',
-      }}>Needed to order</div>
-      <div role="radiogroup" aria-label="Needed to order" style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-        {([null, ...SOFA_ACCESSORIES_NEEDED] as const).map((choice) => {
-          const on = needed === choice;
-          return (
-            <button
-              key={choice ?? 'nothing'}
-              type="button"
-              role="radio"
-              aria-checked={on}
-              onClick={() => onChange(choice)}
-              style={{
-                padding: '4px 12px',
-                borderRadius: 999,
-                border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line)'}`,
-                background: on ? 'var(--c-orange)' : 'var(--c-cream)',
-                color: on ? 'var(--c-paper)' : 'var(--c-ink)',
-                fontFamily: 'var(--font-sans)',
-                fontSize: 'var(--fs-13)',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              {choice ? SOFA_ACCESSORIES_NEEDED_LABEL[choice] : 'Nothing'}
-            </button>
-          );
-        })}
-      </div>
-      <p className={styles.eyebrow} style={{ marginTop: 'var(--space-2)' }}>{NEEDED_HINT[needed ?? 'nothing']}</p>
-      {needBack && !tickedRoles.has('back') && (
-        <p className={styles.eyebrow} style={{ marginTop: 'var(--space-1)', color: '#b3261e' }}>
-          No back cushion is ticked above, so these sofas can't be ordered.
-        </p>
-      )}
-      {needArms && !tickedRoles.has('arm') && (
-        <p className={styles.eyebrow} style={{ marginTop: 'var(--space-1)', color: '#b3261e' }}>
-          No arm rest is ticked above — only a sofa with arms of its own can be ordered.
-        </p>
-      )}
-    </div>
-  );
 };
 
 const AccessoryPlacementSection = ({

@@ -9,7 +9,6 @@ import {
   readAccessoryPlacement,
   readSofaAccessoriesNeeded,
   readSofaAccessoryIds,
-  type SofaAccessoriesNeeded,
   type SofaAccessoryOption,
 } from './sofa-accessories';
 
@@ -1170,9 +1169,9 @@ export interface SofaCustomizerData {
    *  sofa_accessories), each resolved to its sellable SKU — lib/sofa-accessories.ts.
    *  One the catalogue no longer sells (SKU or Model switched off) is left out. */
   accessories:  SofaAccessoryOption[];
-  /** What each sofa must carry before it can be ordered (allowed_options.
-   *  sofa_accessories_needed); null = nothing. */
-  accessoriesNeeded: SofaAccessoriesNeeded | null;
+  /** The ones each sofa must carry before it can be ordered (allowed_options.
+   *  sofa_accessories_needed, a subset of `accessories`); empty = nothing. */
+  accessoriesNeeded: SofaAccessoryOption[];
   /** The Model row that resolved (so caller can show Model name / branding). */
   modelId:      string;
   modelName:    string;
@@ -1352,7 +1351,7 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
         // Empty array = no fabrics configured → Configurator hides fabric picker.
         fabricIds:  (allowed as { fabrics?: string[] }).fabrics ?? [],
         accessories,
-        accessoriesNeeded: readSofaAccessoriesNeeded(model.allowed_options),
+        accessoriesNeeded: readSofaAccessoriesNeeded(model.allowed_options, accessories),
         modelId:    model.id,
         modelName:  model.name,
         modelCode:  model.model_code,
@@ -2507,7 +2506,7 @@ export interface SoHeaderForAdd {
 /** The Sofa Accessory pieces already on a placed order — its live
  *  fabric_accessory lines. A sofa exchange (tbc-swap-sofa) replaces only the
  *  sofa build, so these stay and still count toward the new sofa Model's
- *  "Needed to order" rule (lib/sofa-accessories.ts orderPieceCounts). */
+ *  "Needed to order" rule (lib/sofa-accessories.ts orderPiecesByModel). */
 export const useSoAccessoryPieces = (docNo: string | undefined) =>
   useQuery({
     enabled: !!docNo,

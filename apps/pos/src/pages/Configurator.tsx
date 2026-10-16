@@ -51,7 +51,7 @@ import {
 /* TBC sofa exchange (Loo 2026-06-12) — "Confirm Change" marshals the build
    exactly like the handover does and replaces the SO build server-side. */
 import { fetchItemCodeMap, cartLinesToSoItems } from '../lib/pos-handover-so';
-import { accessoriesStillNeeded, orderPieceCounts } from '../lib/sofa-accessories';
+import { accessoriesStillNeeded, orderHave, orderPiecesByModel } from '../lib/sofa-accessories';
 import {
   useSoAccessoryPieces,
   useSoHeaderForAdd,
@@ -1208,22 +1208,23 @@ export const Configurator = () => {
   // pieces already on it count. Hoisted above the guard (Rules of Hooks).
   const swapPiecesQ = useSoAccessoryPieces(isSwapMode ? swapDoc ?? undefined : undefined);
   const orderPieces = useMemo(
-    () => (isSwapMode && swapPiecesQ.data ? orderPieceCounts(swapPiecesQ.data, sofaCustomizer.data?.accessories ?? []) : null),
+    () => (isSwapMode && swapPiecesQ.data ? orderPiecesByModel(swapPiecesQ.data, sofaCustomizer.data?.accessories ?? []) : null),
     [isSwapMode, swapPiecesQ.data, sofaCustomizer.data],
   );
   // Quick Pick adds no pieces, so a layout the rule wants them on is refused.
   // A saved layout's arms are read off its cells; a bundle preset has its own.
   const qpStillNeeded = useMemo(() => {
-    const needed = sofaCustomizer.data?.accessoriesNeeded ?? null;
-    if (!needed) return null;
+    const needed = sofaCustomizer.data?.accessoriesNeeded ?? [];
+    if (needed.length === 0) return null;
     const ends = qpCells.length > 0 ? analyzeSofa(qpCells, activeDepth) : null;
+    const fromOrder = orderHave(needed, orderPieces);
     return accessoriesStillNeeded(needed, {
-      armEachEnd: (ends ? ends.leftArm && ends.rightArm : true) || (orderPieces?.arms ?? 0) >= 2,
-      backCushion: (orderPieces?.backCushions ?? 0) >= 1,
+      armEachEnd: (ends ? ends.leftArm && ends.rightArm : true) || fromOrder.arms >= 2,
+      pieces: fromOrder.pieces,
     });
   }, [sofaCustomizer.data, qpCells, activeDepth, orderPieces]);
   // An exchange that can't keep its pieces waits for the order's lines.
-  const piecesLoading = isSwapMode && !!sofaCustomizer.data?.accessoriesNeeded && swapPiecesQ.isLoading;
+  const piecesLoading = isSwapMode && (sofaCustomizer.data?.accessoriesNeeded.length ?? 0) > 0 && swapPiecesQ.isLoading;
 
   // Quick-Pick fabric-tier override — resolve against the build's OWN cells so a
   // compartment override (migration 0184, e.g. CNR = Price-2 +RM250) lifts the
@@ -2394,7 +2395,7 @@ export const Configurator = () => {
           fontFamily: 'var(--font-sans)', fontSize: 13, boxShadow: '0 4px 14px rgba(34,31,32,0.12)',
         }}
       >
-        {qpStillNeeded}
+        {qpStillNeeded.full}
         {isSwapMode
           ? ' — this order doesn’t have them, and pieces can only be added on a new order.'
           : isAddToOrderMode

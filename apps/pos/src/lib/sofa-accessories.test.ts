@@ -7,12 +7,13 @@ import {
   accessoryRects,
   boundsWithArms,
   extraArmsOf,
+  describeNeeded,
   guessAccessoryRole,
-  hasBackCushion,
   moveAccessory,
   nearestSlotFor,
   nextSlotFor,
-  orderPieceCounts,
+  orderHave,
+  orderPiecesByModel,
   pruneAccessories,
   readAccessoryPlacement,
   readSofaAccessoriesNeeded,
@@ -66,46 +67,56 @@ describe('reading the Model settings', () => {
     expect(readSofaAccessoryIds({})).toEqual([]);
   });
 
-  it('reads what a sofa must carry to be ordered; anything else is nothing', () => {
-    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'full_set' })).toBe('full_set');
-    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'back_cushions' })).toBe('back_cushions');
-    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'everything' })).toBeNull();
-    expect(readSofaAccessoriesNeeded({})).toBeNull();
+  it('reads the pieces a sofa must carry, out of those it offers', () => {
+    const offered = [BC, SB, AR];
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: ['ar01', 'bc06'] }, offered)).toEqual([BC, AR]);
+    // a piece no longer offered no longer counts
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: ['ar01', 'gone'] }, [BC])).toEqual([]);
+    expect(readSofaAccessoriesNeeded({}, offered)).toEqual([]);
+    // #818 stored a word: it reads as the offered pieces of those kinds
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'full_set' }, offered)).toEqual([BC, AR]);
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'back_cushions' }, offered)).toEqual([BC]);
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'everything' }, offered)).toEqual([]);
   });
 });
 
 describe('what a sofa must carry to be ordered', () => {
-  const none = { armEachEnd: false, backCushion: false };
-  it('nothing needed: always fine', () => {
-    expect(accessoriesStillNeeded(null, none)).toBeNull();
+  const MF = opt('bc06-mf', 'back');
+  const nothing = { armEachEnd: false, pieces: new Set<string>() };
+
+  it('nothing ticked: always fine', () => {
+    expect(accessoriesStillNeeded([], nothing)).toBeNull();
   });
 
-  it('says what is missing for each rule', () => {
-    expect(accessoriesStillNeeded('full_set', none)).toBe('Needs arm rests and a back cushion');
-    expect(accessoriesStillNeeded('full_set', { armEachEnd: true, backCushion: false })).toBe('Needs a back cushion');
-    expect(accessoriesStillNeeded('full_set', { armEachEnd: true, backCushion: true })).toBeNull();
-    expect(accessoriesStillNeeded('arms', { armEachEnd: false, backCushion: true })).toBe('Needs an arm rest at each end');
-    expect(accessoriesStillNeeded('arms', { armEachEnd: true, backCushion: false })).toBeNull();
-    expect(accessoriesStillNeeded('back_cushions', { armEachEnd: false, backCushion: true })).toBeNull();
-    expect(accessoriesStillNeeded('back_cushions', { armEachEnd: true, backCushion: false })).toBe('Needs a back cushion');
+  it('names what is missing, shortly for a button and in full', () => {
+    expect(accessoriesStillNeeded([AR, BC], nothing)).toEqual({
+      short: 'Needs arm rests + back cushion',
+      full: 'Needs an arm rest at each end (AR01) and a back cushion (BC06)',
+    });
+    expect(accessoriesStillNeeded([AR, BC], { armEachEnd: true, pieces: new Set() })?.short).toBe('Needs back cushion');
+    expect(accessoriesStillNeeded([AR, BC], { armEachEnd: true, pieces: new Set(['bc06']) })).toBeNull();
+    // the sand back too
+    expect(accessoriesStillNeeded([BC, SB], { armEachEnd: false, pieces: new Set(['bc06']) })?.full).toBe('Needs a back support (SB01)');
+    expect(accessoriesStillNeeded([BC, SB], { armEachEnd: false, pieces: new Set(['bc06', 'sb01']) })).toBeNull();
   });
 
-  it('a back cushion counts only on the sofa it sits on', () => {
-    const placed = [piece('bc06', 'a', 0), piece('ar01', 'b', 2)];
-    expect(hasBackCushion([armless[0]!], placed, options)).toBe(true);
-    expect(hasBackCushion([armless[1]!], placed, options)).toBe(false);
+  it('pieces of one kind are alternatives', () => {
+    expect(accessoriesStillNeeded([BC, MF], { armEachEnd: false, pieces: new Set(['bc06-mf']) })).toBeNull();
+    expect(accessoriesStillNeeded([BC, MF], nothing)?.full).toBe('Needs a back cushion (BC06 or BC06-MF)');
+    // only the ticked one does
+    expect(accessoriesStillNeeded([BC], { armEachEnd: false, pieces: new Set(['bc06-mf']) })?.full).toBe('Needs a back cushion (BC06)');
   });
 
-  it('counts the pieces already on an order by role, by code or else by name', () => {
-    const lines = [
-      { code: 'AR01', description: 'ARM REST 01', qty: 2 },
-      { code: 'BC06', description: 'BACK CUSHION 06', qty: 3 },
-      { code: 'SB01', description: 'SAND BACK 01', qty: 1 },
-      { code: 'XX9', description: 'Odd piece', qty: 1 },
-    ];
-    expect(orderPieceCounts(lines, [])).toEqual({ arms: 2, backCushions: 4 });
-    // the Model's own setting wins over the name
-    expect(orderPieceCounts(lines, [{ code: 'XX9', role: 'arm' }])).toEqual({ arms: 3, backCushions: 3 });
+  it('describes the rule in words', () => {
+    expect(describeNeeded([AR, BC, MF, SB])).toBe('an arm rest at each end (AR01), a back cushion (BC06 or BC06-MF) and a back support (SB01)');
+  });
+
+  it('reads the pieces already on an order by its offered codes', () => {
+    const lines = [{ code: 'AR01', qty: 2 }, { code: 'BC06', qty: 3 }, { code: 'XX9', qty: 1 }];
+    const pieces = orderPiecesByModel(lines, [BC, AR]);
+    expect([...pieces]).toEqual([['ar01', 2], ['bc06', 3]]);
+    expect(orderHave([AR, BC], pieces)).toEqual({ arms: 2, pieces: new Set(['ar01', 'bc06']) });
+    expect(orderHave([BC], null)).toEqual({ arms: 0, pieces: new Set() });
   });
 });
 

@@ -15,10 +15,10 @@
 // Which of the three a piece is lives on the accessory's Model
 // (allowed_options.placement, set in Modular); which accessories a sofa offers
 // lives on the sofa's Model (allowed_options.sofa_accessories = accessory Model
-// ids), and so does what its sofas must carry before they can be ordered
-// (allowed_options.sofa_accessories_needed — nothing / full set / arm rests /
-// back cushions). All three keys are ours: Houzs stores allowed_options as it
-// is sent and its own screens keep keys they do not know.
+// ids), and so do the ones its sofas must carry before they can be ordered
+// (allowed_options.sofa_accessories_needed — ids ticked from the same list).
+// All three keys are ours: Houzs stores allowed_options as it is sent and its
+// own screens keep keys they do not know.
 //
 // ON THE ORDER every accessory is its own Sales Order line — its own SKU, its
 // own selling price, its own fabric colour (the sofa's unless the salesperson
@@ -133,65 +133,94 @@ export function readSofaAccessoryIds(allowedOptions: unknown): string[] {
   return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string' && x.length > 0) : [];
 }
 
-/** What every sofa of a Model must carry before it can be ordered —
- *  allowed_options.sofa_accessories_needed, set in Modular (owner 2026-10-16:
- *  "full set, or only arm rests, or only back cushions"). Absent = nothing:
- *  an 8210 base can be ordered on its own. */
-export type SofaAccessoriesNeeded = 'full_set' | 'arms' | 'back_cushions';
-
-export const SOFA_ACCESSORIES_NEEDED: readonly SofaAccessoriesNeeded[] = ['full_set', 'arms', 'back_cushions'];
-
-export const SOFA_ACCESSORIES_NEEDED_LABEL: Record<SofaAccessoriesNeeded, string> = {
-  full_set: 'Full set',
-  arms: 'Arm rests only',
-  back_cushions: 'Back cushions only',
-};
-
-/** allowed_options.sofa_accessories_needed of a sofa Model, or null (nothing). */
-export function readSofaAccessoriesNeeded(allowedOptions: unknown): SofaAccessoriesNeeded | null {
+/** The accessories every sofa of a Model must carry before it can be ordered —
+ *  allowed_options.sofa_accessories_needed: accessory Model ids, ticked in
+ *  Modular from the same list as "Sofa accessories" and kept in step with it
+ *  (owner 2026-10-16: tick arm rest, or arm rest and back cushion, or back
+ *  cushion and sand back). Only what the Model offers counts. Pieces of one
+ *  kind ticked together are alternatives — either back cushion will do. #818
+ *  stored a word instead ('full_set' / 'arms' / 'back_cushions'); it reads as
+ *  the offered pieces of those kinds. */
+export function readSofaAccessoriesNeeded<T extends { modelId: string; role: SofaAccessoryRole }>(
+  allowedOptions: unknown,
+  offered: readonly T[],
+): T[] {
   const v = (allowedOptions as { sofa_accessories_needed?: unknown } | null | undefined)?.sofa_accessories_needed;
-  return SOFA_ACCESSORIES_NEEDED.find((x) => x === v) ?? null;
+  if (Array.isArray(v)) return offered.filter((o) => v.includes(o.modelId));
+  const kinds: SofaAccessoryRole[] = v === 'full_set' ? ['arm', 'back'] : v === 'arms' ? ['arm'] : v === 'back_cushions' ? ['back'] : [];
+  return offered.filter((o) => kinds.includes(o.role));
 }
 
-/** What one sofa has toward its Model's rule: an arm at each end (built in or
- *  clipped on), and at least one back cushion. */
-export interface AccessoriesHave { armEachEnd: boolean; backCushion: boolean }
+/** One piece a Model's rule asks for, as the rule's messages name it. */
+export type NeededPiece = { modelId: string; role: SofaAccessoryRole; code: string };
+
+/** What one sofa has toward its Model's rule. */
+export interface AccessoriesHave {
+  /** An arm at each end — built into the modules, or one of the needed arm
+   *  rests clipped on. */
+  armEachEnd: boolean;
+  /** Accessory Model ids on the sofa (for an exchange, also on the order). */
+  pieces: ReadonlySet<string>;
+}
+
+const NEEDED_KINDS: ReadonlyArray<{ role: SofaAccessoryRole; word: string; phrase: string }> = [
+  { role: 'arm', word: 'arm rests', phrase: 'an arm rest at each end' },
+  { role: 'back', word: 'back cushion', phrase: 'a back cushion' },
+  { role: 'back-support', word: 'back support', phrase: 'a back support' },
+];
+
+const listAnd = (xs: readonly string[]): string =>
+  xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
+
+/** The rule in words, each kind with the pieces that do for it: "an arm rest
+ *  at each end (AR01) and a back cushion (BC06 or BC06-MF)". */
+export function describeNeeded(needed: ReadonlyArray<{ role: SofaAccessoryRole; code: string }>): string {
+  return listAnd(NEEDED_KINDS.flatMap((k) => {
+    const alts = needed.filter((n) => n.role === k.role);
+    return alts.length > 0 ? [`${k.phrase} (${alts.map((n) => n.code).join(' or ')})`] : [];
+  }));
+}
 
 /** What one sofa still lacks under its Model's rule, or null when it can be
- *  ordered. Every path that orders a sofa asks this — the Custom canvas, Quick
- *  Pick, adding to a placed order and a sofa exchange (owner 2026-10-16). */
-export function accessoriesStillNeeded(needed: SofaAccessoriesNeeded | null, have: AccessoriesHave): string | null {
-  if (!needed) return null;
-  const arms = needed !== 'back_cushions' && !have.armEachEnd;
-  const back = needed !== 'arms' && !have.backCushion;
-  if (arms && back) return 'Needs arm rests and a back cushion';
-  if (arms) return 'Needs an arm rest at each end';
-  if (back) return 'Needs a back cushion';
-  return null;
+ *  ordered — `short` for a button, `full` naming the pieces. Every path that
+ *  orders a sofa asks this: the Custom canvas, Quick Pick, adding to a placed
+ *  order and a sofa exchange (owner 2026-10-16). */
+export function accessoriesStillNeeded(
+  needed: readonly NeededPiece[],
+  have: AccessoriesHave,
+): { short: string; full: string } | null {
+  const missing = NEEDED_KINDS.filter((k) => {
+    const alts = needed.filter((n) => n.role === k.role);
+    if (alts.length === 0) return false;
+    return k.role === 'arm' ? !have.armEachEnd : !alts.some((n) => have.pieces.has(n.modelId));
+  });
+  if (missing.length === 0) return null;
+  return {
+    short: `Needs ${missing.map((k) => k.word).join(' + ')}`,
+    full: `Needs ${describeNeeded(needed.filter((n) => missing.some((k) => k.role === n.role)))}`,
+  };
 }
 
-/** Whether a back cushion is on one of these modules. */
-export function hasBackCushion(group: readonly Cell[], placed: readonly PlacedAccessory[], options: OptionsById): boolean {
-  const ids = new Set(group.map((c) => c.id));
-  return placed.some((p) => ids.has(p.cellId) && options.get(p.modelId)?.role === 'back');
-}
-
-/** The pieces already on a placed order, by role. A sofa exchange keeps the
- *  order's other lines, so these still count toward the new sofa's rule. A
- *  line's role is its Model's (by code, from the accessories this sofa Model
- *  offers), else read off its name. */
-export function orderPieceCounts(
-  lines: ReadonlyArray<{ code: string; description: string; qty: number }>,
-  offered: ReadonlyArray<Pick<SofaAccessoryOption, 'code' | 'role'>>,
-): { arms: number; backCushions: number } {
-  let arms = 0;
-  let backCushions = 0;
+/** The pieces already on a placed order, by accessory Model (matched by code
+ *  to what this sofa Model offers). A sofa exchange keeps the order's other
+ *  lines, so they still count toward the new sofa's rule. */
+export function orderPiecesByModel(
+  lines: ReadonlyArray<{ code: string; qty: number }>,
+  offered: ReadonlyArray<Pick<SofaAccessoryOption, 'modelId' | 'code'>>,
+): Map<string, number> {
+  const out = new Map<string, number>();
   for (const l of lines) {
-    const role = offered.find((o) => o.code === l.code)?.role ?? guessAccessoryRole(l.description, l.code);
-    if (role === 'arm') arms += l.qty;
-    else if (role === 'back') backCushions += l.qty;
+    const o = offered.find((x) => x.code === l.code);
+    if (o && l.qty > 0) out.set(o.modelId, (out.get(o.modelId) ?? 0) + l.qty);
   }
-  return { arms, backCushions };
+  return out;
+}
+
+/** What an order's pieces give toward the rule: how many of the needed arm
+ *  rests it has (two close both ends), and which pieces. */
+export function orderHave(needed: readonly NeededPiece[], orderPieces: ReadonlyMap<string, number> | null): { arms: number; pieces: Set<string> } {
+  const arms = needed.filter((n) => n.role === 'arm').reduce((s, n) => s + (orderPieces?.get(n.modelId) ?? 0), 0);
+  return { arms, pieces: new Set(orderPieces?.keys() ?? []) };
 }
 
 export const isPriced = (o: Pick<SofaAccessoryOption, 'priceSen'>): boolean =>
