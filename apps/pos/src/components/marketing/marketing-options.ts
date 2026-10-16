@@ -124,7 +124,7 @@ export interface MarketingOptions {
 // No Sofa Accessories in Marketing's builder: they are sold with a sofa, not
 // laid out as compartments to buy.
 const EMPTY_POOL: Omit<SofaCustomizerData, 'compartments'> = {
-  sellingRows: [], sizes: [], legHeights: [], specials: [], fabricIds: [], accessories: [], modelId: '', modelName: '', modelCode: '',
+  sellingRows: [], sizes: [], legHeights: [], specials: [], fabricIds: [], accessories: [], accessoriesNeeded: null, modelId: '', modelName: '', modelCode: '',
 };
 
 export function useMarketingOptions(): MarketingOptions {

@@ -7,7 +7,9 @@ import {
   DEFAULT_ARM_WIDTH_CM,
   guessAccessoryRole,
   readAccessoryPlacement,
+  readSofaAccessoriesNeeded,
   readSofaAccessoryIds,
+  type SofaAccessoriesNeeded,
   type SofaAccessoryOption,
 } from './sofa-accessories';
 
@@ -1168,6 +1170,9 @@ export interface SofaCustomizerData {
    *  sofa_accessories), each resolved to its sellable SKU — lib/sofa-accessories.ts.
    *  One the catalogue no longer sells (SKU or Model switched off) is left out. */
   accessories:  SofaAccessoryOption[];
+  /** What each sofa must carry before it can be ordered (allowed_options.
+   *  sofa_accessories_needed); null = nothing. */
+  accessoriesNeeded: SofaAccessoriesNeeded | null;
   /** The Model row that resolved (so caller can show Model name / branding). */
   modelId:      string;
   modelName:    string;
@@ -1347,6 +1352,7 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
         // Empty array = no fabrics configured → Configurator hides fabric picker.
         fabricIds:  (allowed as { fabrics?: string[] }).fabrics ?? [],
         accessories,
+        accessoriesNeeded: readSofaAccessoriesNeeded(model.allowed_options),
         modelId:    model.id,
         modelName:  model.name,
         modelCode:  model.model_code,
@@ -2497,6 +2503,26 @@ export interface SoHeaderForAdd {
   /** Human reason when addEligible is false (for UI display). */
   addBlockedReason: string | null;
 }
+
+/** The Sofa Accessory pieces already on a placed order — its live
+ *  fabric_accessory lines. A sofa exchange (tbc-swap-sofa) replaces only the
+ *  sofa build, so these stay and still count toward the new sofa Model's
+ *  "Needed to order" rule (lib/sofa-accessories.ts orderPieceCounts). */
+export const useSoAccessoryPieces = (docNo: string | undefined) =>
+  useQuery({
+    enabled: !!docNo,
+    queryKey: ['so-accessory-pieces', docNo],
+    staleTime: 10_000,
+    queryFn: async (): Promise<Array<{ code: string; description: string; qty: number }>> => {
+      if (!docNo) throw new Error('no docNo');
+      const body = await authedFetch<{
+        items?: Array<{ item_code?: string; item_group?: string | null; description?: string | null; qty?: number | null; cancelled?: boolean | null }>;
+      }>(`/mfg-sales-orders/${encodeURIComponent(docNo)}`);
+      return (body.items ?? [])
+        .filter((i) => (i.item_group ?? '').toLowerCase() === 'fabric_accessory' && i.cancelled !== true)
+        .map((i) => ({ code: i.item_code ?? '', description: i.description ?? '', qty: Number(i.qty ?? 1) }));
+    },
+  });
 
 /** Fetch the SO header fields needed for the add-product context.
  *

@@ -16,8 +16,16 @@ import { marketingDispatch, resetMarketingSimulation, simulationPersona } from '
 export const SIMULATION_STORAGE_KEY = '2990:mobile-simulation:v1';
 type Row = Record<string, any>;
 type StoredOrder = { salesOrder: Row; items: Row[]; payments: Row[] };
-type Store = { version: 1; serial: number; cart: { lines: Row[]; sourceQuoteId: string | null }; orders: StoredOrder[]; quotes: Row[]; picks: Row[]; pwp: Row[]; slips: Record<string, Row>; redemptions: Row[]; idempotency: Record<string, { body: string; docNo: string }> };
+type Store = { version: 1; serial: number; cart: { lines: Row[]; sourceQuoteId: string | null }; orders: StoredOrder[]; quotes: Row[]; picks: Row[]; pwp: Row[]; slips: Record<string, Row>; redemptions: Row[]; idempotency: Record<string, { body: string; docNo: string }>; modelOptions?: Record<string, Row> };
 let memory: Store | undefined;
+// Modular saves (PATCH /product-models/:id) change a fixture Model's
+// allowed_options in place, so the catalogue's embedded Model reads them too.
+const ORIGINAL_MODEL_OPTIONS = new Map(fixtures.models.map((m) => [m.id, JSON.stringify(m.allowed_options)]));
+function applyModelOptions(store: Store) {
+  for (const m of fixtures.models as Row[]) {
+    m.allowed_options = store.modelOptions?.[m.id] ?? JSON.parse(ORIGINAL_MODEL_OPTIONS.get(m.id) ?? '{}');
+  }
+}
 const audit: Array<{ method: string; path: string; status: number }> = [];
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const now = () => new Date().toISOString();
@@ -98,14 +106,17 @@ function getStore(): Store {
         // Add new fictional exercise vouchers without resetting an existing
         // salesperson's demo order/payment evidence or reviving a used code.
         for (const code of fixtures.demoRewardCodes) if (!parsed.pwp.some((c) => c.code === code.code)) parsed.pwp.push(clone(code));
+        applyModelOptions(parsed);
         return memory = parsed;
       }
     }
   } catch { /* unavailable or corrupt demo storage: start isolated fresh */ }
-  return memory = initialStore();
+  memory = initialStore();
+  applyModelOptions(memory);
+  return memory;
 }
 function save() { try { localStorage.setItem(SIMULATION_STORAGE_KEY, JSON.stringify(getStore())); } catch { /* in-memory simulator still works with browser storage disabled */ } }
-export function resetSimulation() { memory = initialStore(); audit.length = 0; save(); }
+export function resetSimulation() { memory = initialStore(); applyModelOptions(memory); audit.length = 0; save(); }
 export function getSimulationAudit() { return audit.map((x) => ({ ...x })); }
 export function getSimulationSnapshot() { return clone(getStore()); }
 
@@ -180,6 +191,16 @@ async function dispatch(path: string, params: URLSearchParams, method: string, b
   if (/^\/product-models\/[^/]+$/.test(path) && method === 'GET') {
     const model = fixtures.models.find((m) => m.id === path.split('/')[2]);
     return model ? json({ model, skus: fixtures.products.filter((p) => p.model_id === model.id) }) : failure('not_found', 'Demo model not found.', 404);
+  }
+  if (/^\/product-models\/[^/]+$/.test(path) && method === 'PATCH') {
+    const model = fixtures.models.find((m) => m.id === path.split('/')[2]);
+    if (!model) return failure('not_found', 'Demo model not found.', 404);
+    if (body.allowedOptions && typeof body.allowedOptions === 'object') {
+      store.modelOptions = { ...(store.modelOptions ?? {}), [model.id]: clone(body.allowedOptions) };
+      applyModelOptions(store);
+      save();
+    }
+    return json({ model });
   }
   if (/^\/mfg-products\/[^/]+\/price-history$/.test(path)) return json({ history: [] });
   if (path === '/fabric-library') return json({ fabrics: fixtures.fabrics });
