@@ -1,16 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 215 110" width="215" height="110">
-  <title>2990s Sofa — 7FT — 213cm, 3 seats (arms BOTH sides)</title>
-  <desc>Top-down plan view, drawn to the length it is sold as (7FT ≈ 213cm). 3 seats with backrest at top + hard armrests on BOTH sides; dashed seams between seats.</desc>
+  <title>2990s Sofa Base — 7FT — 213cm, no backrest, no arms</title>
+  <desc>Top-down plan view, drawn to the length it is sold as (7FT ≈ 213cm). A bare seat base: no backrest and no armrests (back cushions and arms are added as Sofa Accessories). The 5 dashed lines are a stitching design, not seats.</desc>
   <g transform="translate(20,20)">
     <rect x="0" y="0" width="175" height="70" rx="3" fill="#F0E6D6" stroke="#2C2C2A" stroke-width="1.4"/>
-    <rect x="0" y="0" width="175" height="11" fill="#D9C2A0" stroke="#2C2C2A" stroke-width="0.8"/>
-    <!-- LEFT armrest -->
-    <rect x="0" y="0" width="11" height="70" fill="#B89972" stroke="#2C2C2A" stroke-width="0.8"/>
-    <!-- RIGHT armrest -->
-    <rect x="164" y="0" width="11" height="70" fill="#B89972" stroke="#2C2C2A" stroke-width="0.8"/>
-    <!-- Seat dividers -->
-    <line x1="62" y1="0" x2="62" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
-    <line x1="113" y1="0" x2="113" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
+    <!-- Design lines (stitching), evenly spaced -->
+    <line x1="29.17" y1="0" x2="29.17" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
+    <line x1="58.33" y1="0" x2="58.33" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
+    <line x1="87.5" y1="0" x2="87.5" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
+    <line x1="116.67" y1="0" x2="116.67" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
+    <line x1="145.83" y1="0" x2="145.83" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
   </g>
 </svg>

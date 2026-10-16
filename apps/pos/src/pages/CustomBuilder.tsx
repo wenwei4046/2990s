@@ -364,6 +364,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   '1-seater',
   '2-seater',
   '3-seater',
+  'By length',
   'Corner',
   'L-Shape',
   'Accessory',
@@ -646,28 +647,33 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
 
   /* ─── Sofa Accessory actions ─────────────────────────────────────── */
 
-  // Tap "+": the first free slot, left to right.
+  // Tap "+": the first free slot, left to right. Back cushions have no limit —
+  // past the usual places the sofa's back is shared out again.
   const addAccessory = (o: SofaAccessoryOption) => {
     const to = nextSlotFor(o, cells, accessories, accessoryById, depth);
     if (!to) {
       flashAccessoryNote(
         o.role === 'arm' ? 'There is no armless end for an extra arm.'
-          : o.role === 'back-support' ? 'Add a back cushion first — a back support goes behind one.'
-            : cells.length === 0 ? 'Add a seat first.'
-              : 'Every seat already has a back cushion.',
+          : o.role === 'back-support'
+            ? (accessories.some((p) => accessoryById.get(p.modelId)?.role === 'back')
+              ? 'Every back cushion already has a back support — add another back cushion first.'
+              : 'Add a back cushion first — a back support goes behind one.')
+            : cells.length === 0 ? 'Add a sofa first.'
+              : 'This sofa has no back for a cushion.',
       );
       return;
     }
     const id = nextCellId();
-    setAccessories((prev) => [...prev, { id, modelId: o.modelId, ...to }]);
+    setAccessories((prev) => pruneAccessories([...prev, { id, modelId: o.modelId, ...to }], cells, accessoryById, depth));
     setSelectedAccessoryId(id);
     setSelectedId(null);
     setSelectedGroupIds(null);
   };
 
   const removeAccessory = (id: string) => {
-    // A back support behind a removed cushion goes with it (pruneAccessories).
-    setAccessories((prev) => prev.filter((p) => p.id !== id));
+    // A back support behind a removed cushion goes with it, and the cushions
+    // left re-spread along the back (pruneAccessories).
+    setAccessories((prev) => pruneAccessories(prev.filter((p) => p.id !== id), cells, accessoryById, depth));
     setSelectedAccessoryId(null);
   };
 
@@ -863,8 +869,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     if (!piece || !o || !r) return;
     const point = { x: r.rect.x + r.rect.w / 2 + d.dx, y: r.rect.y + r.rect.h / 2 + d.dy };
     const to = nearestSlotFor(o, point, cells, accessories, accessoryById, depth, piece.id);
-    if (to) setAccessories((prev) => moveAccessory(prev, piece.id, to, accessoryById));
-    else flashAccessoryNote(o.role === 'arm' ? 'Drop an extra arm at an armless end.' : 'Drop it on a seat to attach it.');
+    if (to) setAccessories((prev) => pruneAccessories(moveAccessory(prev, piece.id, to, accessoryById), cells, accessoryById, depth));
+    else flashAccessoryNote(
+      o.role === 'arm' ? 'Drop an extra arm at an armless end.'
+        : o.role === 'back-support' ? 'Drop it on a back cushion that has no back support yet.'
+          : 'Drop it along the back of a sofa to attach it.',
+    );
   };
 
   /* ─── Group + price + violations ───────────────────────────────── */
@@ -1452,9 +1462,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             });
           })()}
           {/* Sofa Accessories this Model offers (Modular › Sofa accessories).
-              Tap to attach to the next free seat / armless end; drag a piece
-              on the canvas to move it. One without a selling price can't be
-              added — Houzs would book whatever the tablet sent for it. */}
+              Tap to attach to the next free place on a back / armless end (back
+              cushions: no limit); drag a piece on the canvas to move it. One
+              without a selling price can't be added — Houzs would book whatever
+              the tablet sent for it. */}
           {accessoryOptions.length > 0 && (
             <div className={styles.paletteGroup}>
               <div className={styles.paletteGroupHead}>Sofa accessories</div>

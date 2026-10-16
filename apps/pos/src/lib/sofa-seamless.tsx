@@ -47,7 +47,15 @@ const ART_BODY_UNITS = 70;
 export const isFunctionalSeat = (id: string): boolean => /\([PRL]\)/.test(id);
 export const functionalBadge = (id: string): string => id.match(/\(([PRL])\)/)?.[1] ?? '';
 
-export interface SeamlessSlot { moduleId: string; len: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean; armWide: boolean }
+/** `cushions` = the dashed sections drawn on the slot: its seat cushions, or a
+ *  bare base's design panels. `bare` = no backrest band (8210's 7FT…4FT). */
+export interface SeamlessSlot { moduleId: string; len: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean; armWide: boolean; bare: boolean }
+
+/** Dashed sections across a module: one a seat cushion, or — on a bare base
+ *  (8210's 7FT…4FT) — the panels between its design lines, which are not
+ *  seats. */
+const dashedSections = (m: SofaModuleSpec): number =>
+  m.bare ? (m.designLines ?? 0) + 1 : Math.max(1, m.cushions);
 export interface SeamlessRun { totalLen: number; thickness: number; slots: SeamlessSlot[] }
 
 /** Analyse a group of cells (sofa modules + any consoles, free stools
@@ -121,12 +129,13 @@ export const buildSeamlessRun = (cells: Cell[], depth: Depth, rot: Rot): Seamles
     return {
       moduleId: m.id,
       len: axisLen(b),
-      cushions: isConsole ? 0 : Math.max(1, m.cushions),
+      cushions: isConsole ? 0 : dashedSections(m),
       kind: isConsole ? 'console' : 'sofa',
       armLeft: !isConsole && (bothArms || /\(LHF\)$/.test(m.id)),
       armRight: !isConsole && (bothArms || /\(RHF\)$/.test(m.id)),
       // 1B / 2B: the armed side is a WIDE bench, not a hard arm (drawn below).
       armWide: !isConsole && /^[12]B\(/.test(m.id),
+      bare: !isConsole && m.bare === true,
     };
   });
   // Need at least one real sofa module (don't draw a run of only consoles).
@@ -165,12 +174,17 @@ export const renderSeamlessSofa = (
   const benchInset = 2 * u;
   const benchRx = 5 * u;
   // Resolve each slot to an [start, end] range along the run axis.
-  const ranges: { moduleId: string; start: number; end: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean; armWide: boolean }[] = [];
+  const ranges: { moduleId: string; start: number; end: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean; armWide: boolean; bare: boolean }[] = [];
   let acc = 0;
   for (const s of slots) {
-    ranges.push({ moduleId: s.moduleId, start: acc, end: acc + s.len, cushions: s.cushions, kind: s.kind, armLeft: s.armLeft, armRight: s.armRight, armWide: s.armWide });
+    ranges.push({ moduleId: s.moduleId, start: acc, end: acc + s.len, cushions: s.cushions, kind: s.kind, armLeft: s.armLeft, armRight: s.armRight, armWide: s.armWide, bare: s.bare });
     acc += s.len;
   }
+  // The backrest band runs the whole length — except over a bare base, which
+  // has none (its back cushions are drawn on it as Sofa Accessories).
+  const bandRanges = ranges.some((r) => r.bare)
+    ? ranges.filter((r) => !r.bare).map((r) => ({ start: r.start, end: r.end }))
+    : [{ start: 0, end: L }];
   // Solid lines at interior module boundaries.
   const bounds = ranges.slice(0, -1).map((r) => r.end);
   // Dashed lines at cushion seams within each SEAT module.
@@ -189,7 +203,9 @@ export const renderSeamlessSofa = (
       style={{ display: 'block', overflow: 'visible' }}
     >
       <rect x={0} y={0} width={L} height={T} rx={rx} fill={SOFA_SEAT} stroke={SOFA_INK} strokeWidth={swOuter} />
-      <rect x={0} y={0} width={L} height={bandH} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />
+      {bandRanges.map((r, i) => (
+        <rect key={`band${i}`} x={r.start} y={0} width={r.end - r.start} height={bandH} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />
+      ))}
       {/* Interior consoles: draw the module's REAL art (cropped to its
           silhouette so it fills the slot), identical to how the lone console
           cell renders — keeps the wood-lid / seams / cup-holder detail and its
@@ -401,7 +417,8 @@ export const renderSeamlessGroup = (
       // together — the arms/backrest must stay visible instead of melting into
       // one seamless body ("arm and arm is not a complete sofa", Loo 2026-06-04).
       // `free` only picks the outline weight below (thick outer, thin seam).
-      const wantBand = !isConsole && (edges[e] === 'back' || (isCorner && edges[e] === 'arm'));
+      // A bare base (8210's 7FT…4FT) has no backrest to draw.
+      const wantBand = !isConsole && !m.bare && (edges[e] === 'back' || (isCorner && edges[e] === 'arm'));
       if (wantBand) {
         const s = strip(r, e, bandH);
         band.push(<rect key={`bd${i}-${e}`} x={s.x} y={s.y} width={s.w} height={s.h} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />);
@@ -429,8 +446,9 @@ export const renderSeamlessGroup = (
       lines.push(<line key={`ln${i}-${e}`} x1={x1} y1={y1} x2={x2} y2={y2} stroke={SOFA_INK} strokeWidth={free ? swOuter : swInner} strokeLinecap="round" />);
     }
 
-    // Cushion seams (dashed), perpendicular to the cell's LENGTH axis.
-    const cushions = isConsole ? 0 : Math.max(1, m.cushions);
+    // Cushion seams (dashed), perpendicular to the cell's LENGTH axis — on a
+    // bare base, its design lines.
+    const cushions = isConsole ? 0 : dashedSections(m);
     if (cushions >= 2) {
       const lenX = r.w >= r.h;
       for (let j = 1; j < cushions; j++) {

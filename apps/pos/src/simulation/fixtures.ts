@@ -26,8 +26,9 @@ export const models = [
   { ...commonModel, id: 'demo-model-back-cushion', name: 'Back cushion', model_code: 'DEMO-BC', category: 'FABRIC_ACCESSORY', description: 'Loose back cushion in the sofa fabric', allowed_options: { placement: { role: 'back' } } },
   { ...commonModel, id: 'demo-model-sand-back', name: 'Sand back', model_code: 'DEMO-SB', category: 'FABRIC_ACCESSORY', description: 'Firm support behind a back cushion', allowed_options: { placement: { role: 'back-support' } } },
   { ...commonModel, id: 'demo-model-arm', name: 'Arm rest', model_code: 'DEMO-AR', category: 'FABRIC_ACCESSORY', description: 'Clip-on arm for an armless end', allowed_options: { placement: { role: 'arm', armWidthCm: 20 } } },
-  // A sofa sold by overall length, like 8210 (7FT / 6FT / 5FT / 4FT).
-  { ...commonModel, id: 'demo-model-linea', name: 'LINEA', model_code: 'LINEA', category: 'SOFA', description: 'One piece, chosen by length.', allowed_options: { compartments: lengthCodes, sizes: ['24', '28'], fabrics: fabricCodes.CG, leg_heights: ['6'], sofa_accessories: ['demo-model-back-cushion'] } },
+  // A bare base sold by overall length, like 8210 (7FT / 6FT / 5FT / 4FT):
+  // no back and no arms of its own — cushions, sand backs and arms are added.
+  { ...commonModel, id: 'demo-model-linea', name: 'LINEA', model_code: 'LINEA', category: 'SOFA', description: 'One base, chosen by length.', allowed_options: { compartments: lengthCodes, sizes: ['24', '28'], fabrics: fabricCodes.CG, leg_heights: ['6'], sofa_accessories: ['demo-model-back-cushion', 'demo-model-sand-back', 'demo-model-arm'] } },
 ];
 const sku = (id: string, code: string, name: string, category: string, modelIndex: number, price: number, size: string | null = null, pwp: number | null = null) => ({
   id, code, name, category, model_id: models[modelIndex]!.id, base_model: models[modelIndex]!.model_code, description: models[modelIndex]!.description ?? 'Fictional demonstration product', branding: '2990', size_code: size, size_label: size === 'K' ? 'King · 183×190 cm' : size === 'Q' ? 'Queen · 152×190 cm' : null,

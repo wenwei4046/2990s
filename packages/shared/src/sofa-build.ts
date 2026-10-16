@@ -36,17 +36,27 @@ export interface Cell {
 
 export interface SofaModuleSpec {
   id: string;
-  group: '1-seater' | '2-seater' | '3-seater' | 'Corner' | 'L-Shape' | 'Accessory';
+  group: '1-seater' | '2-seater' | '3-seater' | 'By length' | 'Corner' | 'L-Shape' | 'Accessory';
   label: string;
   /** Width along the cushion axis (cm), 24″ baseline. */
   w: number;
   /** Depth (cm). */
   d: number;
+  /** Seat cushions. On a bare base: how many back cushions fill its back at
+   *  their usual width — it has no seats. */
   cushions: number;
   accessory?: boolean;
   /** Sold by its overall length (7FT, 6FT, …): the plan-view length is the
    *  size it is sold as and does NOT grow with the seat depth. */
   fixedLength?: boolean;
+  /** A bare base (8210's 7FT…4FT, owner 2026-10-16): no backrest and no arms
+   *  of its own — its back cushions and arms are Sofa Accessories added on the
+   *  POS canvas. Its ends are finished, so it is a whole sofa with or without
+   *  them. Drawn as a plain seat crossed by `designLines`. */
+  bare?: boolean;
+  /** Dashed lines drawn evenly across a bare base: a stitching design, not
+   *  seats. */
+  designLines?: number;
 }
 
 export interface SofaProductPricingRow {
@@ -214,18 +224,19 @@ export const SOFA_MODULES: readonly SofaModuleSpec[] = [
   { id: '1S(P)', group: '1-seater', label: '1S · Power · Both arms',     w: 115, d: 95, cushions: 1 },
   { id: '1S(R)', group: '1-seater', label: '1S · Recliner · Both arms',  w: 115, d: 95, cushions: 1 },
   { id: '1S(L)', group: '1-seater', label: '1S · Power leg · Both arms', w: 115, d: 95, cushions: 1 },
-  // Sofas sold by overall length (model 8210, owner 2026-10-16): whole units
-  // with an arm each side, like 1S/2S/3S, whose length IS the name (feet →
-  // cm) at every seat depth. Without a spec the canvas dropped them, so a
-  // Model offering only these showed an empty Custom palette. Seat counts are
-  // an assumption until the owner confirms (7/6FT three, 5/4FT two). Pricing
+  // Bare bases sold by overall length (model 8210, owner 2026-10-16): no back
+  // and no arms — the customer adds back cushions (as many as they like) and
+  // arms as Sofa Accessories. The length IS the name (feet → cm) at every seat
+  // depth. The dashed lines are a stitching design, one about every 36cm as the
+  // owner sketched them, not seats; `cushions` is only how many back cushions
+  // sit at their usual ~60-70cm width. Without a spec the canvas dropped these,
+  // so a Model offering only them showed an empty Custom palette. Pricing
   // needs no spec — both this file and Houzs's copy price a cell from its
-  // Model SKU ({MODEL}-7FT) by code. Shortest first, so the palette reads
-  // 4FT, 5FT | 6FT, 7FT across its two groups.
-  { id: '4FT', group: '2-seater', label: '4FT sofa (both arms)', w: 122, d: 95, cushions: 2, fixedLength: true },
-  { id: '5FT', group: '2-seater', label: '5FT sofa (both arms)', w: 152, d: 95, cushions: 2, fixedLength: true },
-  { id: '6FT', group: '3-seater', label: '6FT sofa (both arms)', w: 183, d: 95, cushions: 3, fixedLength: true },
-  { id: '7FT', group: '3-seater', label: '7FT sofa (both arms)', w: 213, d: 95, cushions: 3, fixedLength: true },
+  // Model SKU ({MODEL}-7FT) by code. Shortest first.
+  { id: '4FT', group: 'By length', label: '4FT · No arms, no back', w: 122, d: 95, cushions: 2, fixedLength: true, bare: true, designLines: 2 },
+  { id: '5FT', group: 'By length', label: '5FT · No arms, no back', w: 152, d: 95, cushions: 2, fixedLength: true, bare: true, designLines: 3 },
+  { id: '6FT', group: 'By length', label: '6FT · No arms, no back', w: 183, d: 95, cushions: 3, fixedLength: true, bare: true, designLines: 4 },
+  { id: '7FT', group: 'By length', label: '7FT · No arms, no back', w: 213, d: 95, cushions: 3, fixedLength: true, bare: true, designLines: 5 },
 ];
 
 const MODULE_BY_ID = new Map<string, SofaModuleSpec>(SOFA_MODULES.map((m) => [m.id, m]));
@@ -361,6 +372,7 @@ export type SofaCompartmentGroup =
   | '1-seater'
   | '2-seater'
   | '3-seater'
+  | 'By length'
   | 'Corner'
   | 'L-Shape'
   | 'Accessory'
@@ -379,6 +391,7 @@ export const classifySofaCompartment = (rawCode: string): SofaCompartmentGroup =
   if (/^L[-(]/i.test(norm) || /^L$/i.test(norm)) return 'L-Shape';
   if (/^CNR$/i.test(norm) || /^CORNER/i.test(norm)) return 'Corner';
   if (/^STOOL|^Console|^WC-/i.test(norm)) return 'Accessory';
+  if (/^\d+FT(\(|$)/i.test(norm)) return 'By length';
   if (/^2/.test(norm)) return '2-seater';
   if (/^1/.test(norm)) return '1-seater';
   return 'Other';
@@ -893,11 +906,13 @@ const MODULE_EDGES_BASE: Record<string, [EdgeType, EdgeType, EdgeType, EdgeType]
   '1S(P)': ['arm', 'back', 'arm', 'front'],
   '1S(R)': ['arm', 'back', 'arm', 'front'],
   '1S(L)': ['arm', 'back', 'arm', 'front'],
-  // Length-sold whole units (8210) — an arm each end, like 2S/3S.
-  '7FT': ['arm', 'back', 'arm', 'front'],
-  '6FT': ['arm', 'back', 'arm', 'front'],
-  '5FT': ['arm', 'back', 'arm', 'front'],
-  '4FT': ['arm', 'back', 'arm', 'front'],
+  // Bare bases sold by length (8210) — no arms, so a clip-on arm (Sofa
+  // Accessory) can go on either end. The back stays 'back': it is where the
+  // back cushions go, and nothing joins there.
+  '7FT': ['open', 'back', 'open', 'front'],
+  '6FT': ['open', 'back', 'open', 'front'],
+  '5FT': ['open', 'back', 'open', 'front'],
+  '4FT': ['open', 'back', 'open', 'front'],
 };
 
 /** Clockwise 90° shifts [W,N,E,S] → [S,W,N,E]. */
@@ -1792,6 +1807,14 @@ export const analyzeSofa = (
     const everyPieceStandsAlone = group.every((c) => c.moduleId === 'STOOL');
     closed = everyPieceStandsAlone;
     reason = everyPieceStandsAlone ? null : 'Accessory needs a sofa next to it';
+  }
+
+  // Bare bases (8210's 7FT…4FT) are finished at both ends: a group of them is
+  // a whole sofa with or without clip-on arms, the way a stool stands alone.
+  const sofaPieces = group.filter((c) => !isAccessoryModule(c.moduleId));
+  if (sofaPieces.length > 0 && sofaPieces.every((c) => findModule(c.moduleId)?.bare === true)) {
+    closed = violations.length === 0;
+    reason = closed ? null : 'Arms colliding';
   }
 
   return { violations, closed, reason, leftArm: headArm, rightArm: tailArm };

@@ -26,7 +26,7 @@ export interface BlueprintModule {
   benchR?: boolean;
   /** Backrest strip down the left edge too — the corner piece. */
   backL?: boolean;
-  /** No backrest at all — a stool or a console. */
+  /** No backrest at all — a stool, a console, or a bare base (8210's 7FT…4FT). */
   noBack?: boolean;
   /** Wood console: the whole body in the arm colour. */
   wood?: boolean;
@@ -68,11 +68,12 @@ export const BLUEPRINT_MODULES: Readonly<Record<string, BlueprintModule>> = {
   '2B(RHF)': { w: 120, h: 70, benchR: true, seams: [49] },
   '2S': { w: 120, h: 70, armL: true, armR: true, seams: [60] },
   '3S': { w: 180, h: 70, armL: true, armR: true, seams: [67, 113] },
-  // Length-sold whole units (8210, 2026-10-16) — drawn to their length.
-  '7FT': { w: 175, h: 70, armL: true, armR: true, seams: [62, 113] },
-  '6FT': { w: 150, h: 70, armL: true, armR: true, seams: [53.7, 96.3] },
-  '5FT': { w: 125, h: 70, armL: true, armR: true, seams: [62.5] },
-  '4FT': { w: 100, h: 70, armL: true, armR: true, seams: [50] },
+  // Bare bases sold by length (8210, owner 2026-10-16) — drawn to their
+  // length, no back and no arms; the dashed lines are a stitching design.
+  '7FT': { w: 175, h: 70, noBack: true, seams: [29.17, 58.33, 87.5, 116.67, 145.83] },
+  '6FT': { w: 150, h: 70, noBack: true, seams: [30, 60, 90, 120] },
+  '5FT': { w: 125, h: 70, noBack: true, seams: [31.25, 62.5, 93.75] },
+  '4FT': { w: 100, h: 70, noBack: true, seams: [33.33, 66.67] },
   'CNR': { w: 60, h: 60, backL: true },
   'STOOL': { w: 47, h: 47, noBack: true },
   'WC-45': { w: 28, h: 70, noBack: true },

@@ -4,11 +4,14 @@
 // A Sofa Accessory is Houzs's product category FABRIC_ACCESSORY (shown as
 // "Sofa Accessory", their #3857). Owner 2026-10-16: they are sold from the sofa
 // canvas only, where each piece attaches to a module:
-//   - back cushion (BC06, BC06-MF) — on a seat, against its backrest; one a seat;
-//   - back support (SB01 "sand back") — stacks behind the back cushion on the
-//     SAME seat, so that seat needs its back cushion first; one a seat;
-//   - arm (AR01) — an extra arm clipped onto an ARMLESS end (1NA, 2NA…). The
-//     sofa gets wider by it, and that end counts as having an arm.
+//   - back cushion (BC06, BC06-MF) — along a module's back, against its
+//     backrest (on a bare base such as 8210's 7FT, which has none, right at the
+//     back). NO LIMIT on how many (owner 2026-10-16): they take the module's
+//     usual places first, one a seat; past that its back is shared out evenly;
+//   - back support (SB01 "sand back") — stacks behind a back cushion, so it
+//     needs one first; one behind each cushion;
+//   - arm (AR01) — an extra arm clipped onto an ARMLESS end (1NA, 2NA, a bare
+//     base…). The sofa gets wider by it, and that end counts as having an arm.
 // Which of the three a piece is lives on the accessory's Model
 // (allowed_options.placement, set in Modular); which accessories a sofa offers
 // lives on the sofa's Model (allowed_options.sofa_accessories = accessory Model
@@ -91,8 +94,10 @@ export interface PlacedAccessory {
   modelId: string;
   /** The module it hangs on. */
   cellId: string;
-  /** back / back-support: the seat, 0-based, left to right on the module
-   *  unrotated. arm: the module's side in its own frame — 0 left, 2 right. */
+  /** back / back-support: the cushion's place, 0-based, left to right on the
+   *  module unrotated — a seat while the module carries no more cushions than
+   *  it usually takes, else one of that many even shares of its back. arm: the
+   *  module's side in its own frame — 0 left, 2 right. */
   slot: number;
   /** A colour of its own. Absent = the sofa's. */
   fabric?: AccessoryFabric;
@@ -152,22 +157,33 @@ const quarterTurns = (cell: Cell): number => ((((cell.rot % 360) + 360) % 360) /
 
 const toCanvasEdge = (cell: Cell, local: number): EdgeIdx => ((local + quarterTurns(cell)) % 4) as EdgeIdx;
 
-/** Seats of a module that has a backrest; 0 for corners, consoles, stools. */
-export function backSeatCount(cell: Cell): number {
+/** Back cushions a module takes at their usual width — one a seat (a bare base,
+ *  which has no seats: SofaModuleSpec.cushions); 0 for corners, consoles,
+ *  stools. Not a limit: past it the back is shared out evenly. */
+export function usualBackCushions(cell: Cell): number {
   const m = findModule(cell.moduleId);
   if (!m || m.accessory || isAccessoryModule(cell.moduleId)) return 0;
   if (localEdges(cell)[LOCAL_N] !== 'back') return 0;
   return Math.max(1, m.cushions);
 }
 
-/** A strip in front of a seat's backrest, `from`..`from + thick` cm deep, in
- *  canvas coordinates. Works in the module's own frame (backrest at the top,
- *  seats left to right) and turns the result with the module. */
-function seatStrip(cell: Cell, slot: number, depth: Depth, from: number, thick: number): Bbox | null {
+/** How far in from the module's back a cushion starts: in front of the
+ *  backrest band, or right at the back of a bare base, which has none. */
+const backrestCm = (cell: Cell): number => (findModule(cell.moduleId)?.bare ? 0 : BACKREST_CM);
+
+/** Even shares of a module's back for the cushion places in use: its usual
+ *  places, or more when it carries more cushions than that. */
+const columnsFor = (cell: Cell, slots: readonly number[]): number =>
+  Math.max(usualBackCushions(cell), slots.length, ...slots.map((s) => s + 1));
+
+/** A strip across share `slot` of `columns` even shares of a module's back,
+ *  `from`..`from + thick` cm deep, in canvas coordinates. Works in the module's
+ *  own frame (back at the top, left to right) and turns the result with it. */
+function seatStrip(cell: Cell, slot: number, columns: number, depth: Depth, from: number, thick: number): Bbox | null {
   const m = findModule(cell.moduleId);
   const b = cellBbox(cell, depth);
-  const n = backSeatCount(cell);
-  if (!m || !b || slot < 0 || slot >= n) return null;
+  if (!m || !b || usualBackCushions(cell) === 0 || slot < 0 || slot >= columns) return null;
+  const n = columns;
   const fp0 = moduleFootprint(m, 0, depth); // unrotated: w along the seats, h deep
   const edges = localEdges(cell);
   const seatW = fp0.w / n;
@@ -207,9 +223,14 @@ function armRect(cell: Cell, localSide: number, depth: Depth, widthCm: number): 
 
 /* ─── Slots ──────────────────────────────────────────────────────────── */
 
-interface Slot { cellId: string; slot: number; rect: Bbox }
+/** `more`: past the module's usual places — taking it shares its back out again. */
+interface Slot { cellId: string; slot: number; rect: Bbox; more?: true }
 
 const centreOf = (r: Bbox) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
+
+/** How far a point is from a rect (0 inside it). */
+const distanceTo = (r: Bbox, p: { x: number; y: number }): number =>
+  Math.hypot(Math.max(r.x - p.x, 0, p.x - (r.x + r.w)), Math.max(r.y - p.y, 0, p.y - (r.y + r.h)));
 
 /** Left to right, then top to bottom — the order tap-to-add fills them in. */
 const byPosition = (a: Slot, b: Slot): number => {
@@ -218,12 +239,54 @@ const byPosition = (a: Slot, b: Slot): number => {
   return ca.x - cb.x || ca.y - cb.y;
 };
 
-function backSlots(cells: readonly Cell[], depth: Depth): Slot[] {
+/** The places the back cushions on each module take, by module id. */
+function cushionSlotsByCell(placed: readonly PlacedAccessory[], options: OptionsById, exceptId?: string): Map<string, number[]> {
+  const out = new Map<string, number[]>();
+  for (const p of placed) {
+    if (p.id === exceptId || options.get(p.modelId)?.role !== 'back') continue;
+    out.set(p.cellId, [...(out.get(p.cellId) ?? []), p.slot]);
+  }
+  return out;
+}
+
+/** Where another back cushion can go: a module's free usual places, or — once
+ *  they are all taken — one more on it, as many as anyone wants. That one's
+ *  target is the module's whole back, and it goes on the end. */
+function backCushionSlots(cells: readonly Cell[], placed: readonly PlacedAccessory[], options: OptionsById, depth: Depth, exceptId?: string): Slot[] {
+  const taken = cushionSlotsByCell(placed, options, exceptId);
   const out: Slot[] = [];
   for (const c of cells) {
     if (!c.id) continue;
-    for (let k = 0; k < backSeatCount(c); k++) {
-      const rect = seatStrip(c, k, depth, BACKREST_CM, CUSHION_CM);
+    const usual = usualBackCushions(c);
+    if (usual === 0) continue;
+    const mine = taken.get(c.id) ?? [];
+    const from = backrestCm(c);
+    if (mine.length < usual) {
+      for (let k = 0; k < usual; k++) {
+        if (mine.includes(k)) continue;
+        const rect = seatStrip(c, k, usual, depth, from, CUSHION_CM);
+        if (rect) out.push({ cellId: c.id, slot: k, rect });
+      }
+    } else {
+      const rect = seatStrip(c, 0, 1, depth, from, CUSHION_CM);
+      if (rect) out.push({ cellId: c.id, slot: Math.max(usual, ...mine.map((s) => s + 1)), rect, more: true });
+    }
+  }
+  return out.sort(byPosition);
+}
+
+/** Back cushions that have no back support behind them yet. */
+function supportSlots(cells: readonly Cell[], placed: readonly PlacedAccessory[], options: OptionsById, depth: Depth, exceptId?: string): Slot[] {
+  const cushions = cushionSlotsByCell(placed, options);
+  const supports = occupied(placed, options, 'back-support', exceptId);
+  const out: Slot[] = [];
+  for (const c of cells) {
+    if (!c.id) continue;
+    const mine = cushions.get(c.id) ?? [];
+    const columns = columnsFor(c, mine);
+    for (const k of mine) {
+      if (supports.has(slotKey(c.id, k))) continue;
+      const rect = seatStrip(c, k, columns, depth, backrestCm(c), CUSHION_CM);
       if (rect) out.push({ cellId: c.id, slot: k, rect });
     }
   }
@@ -268,20 +331,15 @@ function candidateSlots(
     const taken = occupied(placed, options, 'arm', exceptId);
     return armSlots(cells, depth, option.armWidthCm).filter((s) => !taken.has(slotKey(s.cellId, s.slot)));
   }
-  const cushions = occupied(placed, options, 'back', exceptId);
-  if (option.role === 'back') {
-    return backSlots(cells, depth).filter((s) => !cushions.has(slotKey(s.cellId, s.slot)));
-  }
-  const supports = occupied(placed, options, 'back-support', exceptId);
-  return backSlots(cells, depth).filter((s) => {
-    const k = slotKey(s.cellId, s.slot);
-    return cushions.has(k) && !supports.has(k);
-  });
+  if (option.role === 'back') return backCushionSlots(cells, placed, options, depth, exceptId);
+  return supportSlots(cells, placed, options, depth, exceptId);
 }
 
-/** Where tapping "+" puts a new piece: the first free slot, left to right.
- *  null = nowhere — every seat has one / no back cushion to stack on / no
- *  armless end. */
+/** Where tapping "+" puts a new piece: the first free slot, left to right. A
+ *  back cushion always has somewhere to go on a sofa with a back: once every
+ *  module's usual places are taken, one more goes on the module with the most
+ *  back per cushion. null = nowhere — no back / no back cushion to stack on /
+ *  no armless end. */
 export function nextSlotFor(
   option: Pick<SofaAccessoryOption, 'role' | 'armWidthCm'>,
   cells: readonly Cell[],
@@ -289,12 +347,19 @@ export function nextSlotFor(
   options: OptionsById,
   depth: Depth,
 ): { cellId: string; slot: number } | null {
-  const s = candidateSlots(option, cells, placed, options, depth)[0];
+  const slots = candidateSlots(option, cells, placed, options, depth);
+  let s = slots.find((x) => !x.more);
+  if (!s && slots.length > 0) {
+    const count = cushionSlotsByCell(placed, options);
+    const room = (x: Slot) => Math.max(x.rect.w, x.rect.h) / ((count.get(x.cellId)?.length ?? 0) + 1);
+    // Already left to right, so a tie keeps the leftmost.
+    s = slots.reduce((best, x) => (room(x) > room(best) + 0.01 ? x : best));
+  }
   return s ? { cellId: s.cellId, slot: s.slot } : null;
 }
 
 /** Where a piece dragged to `point` lands: the nearest free slot within
- *  ACCESSORY_SNAP_CM, or null (it goes back where it was). */
+ *  ACCESSORY_SNAP_CM of it, or null (it goes back where it was). */
 export function nearestSlotFor(
   option: Pick<SofaAccessoryOption, 'role' | 'armWidthCm'>,
   point: { x: number; y: number },
@@ -307,8 +372,7 @@ export function nearestSlotFor(
   let best: Slot | null = null;
   let bestD = ACCESSORY_SNAP_CM;
   for (const s of candidateSlots(option, cells, placed, options, depth, exceptId)) {
-    const c = centreOf(s.rect);
-    const d = Math.hypot(c.x - point.x, c.y - point.y);
+    const d = distanceTo(s.rect, point);
     if (d <= bestD) { bestD = d; best = s; }
   }
   return best ? { cellId: best.cellId, slot: best.slot } : null;
@@ -336,9 +400,12 @@ export function moveAccessory(
 }
 
 /** Keep only pieces that still fit: their Model is still offered, their module
- *  and slot still exist, one of each role a slot, and a back support only where
- *  its seat still has the back cushion. Returns the SAME array when nothing
- *  changed, so it can run in an effect without looping. */
+ *  still exists (with a back, for the back pieces; the end still armless, for
+ *  an arm), one piece a place, and a back support only behind a back cushion.
+ *  Back cushions are then re-numbered so they stay where they show — on their
+ *  seats while a module has no more than it usually takes, else 0..k-1 left to
+ *  right — and each support moves with its cushion. Returns the SAME array when
+ *  nothing changed, so it can run in an effect without looping. */
 export function pruneAccessories(
   placed: readonly PlacedAccessory[],
   cells: readonly Cell[],
@@ -346,29 +413,50 @@ export function pruneAccessories(
   depth: Depth,
 ): PlacedAccessory[] {
   const cellById = new Map(cells.filter((c) => c.id).map((c) => [c.id as string, c]));
-  const kept = new Set<string>();
-  const seen = new Set<string>();
-  const fits = (p: PlacedAccessory, role: SofaAccessoryRole): boolean => {
+  const roleOf = (p: PlacedAccessory) => options.get(p.modelId)?.role;
+  // Back cushions by module, a double on one place dropped.
+  const cushionsByCell = new Map<string, PlacedAccessory[]>();
+  for (const p of placed) {
     const cell = cellById.get(p.cellId);
-    if (!cell) return false;
-    if (role === 'arm') return isOpenEnd(cell, p.slot, cells, depth);
-    return p.slot >= 0 && p.slot < backSeatCount(cell);
-  };
-  for (const role of ['back', 'arm', 'back-support'] as const) {
-    for (const p of placed) {
-      if (options.get(p.modelId)?.role !== role || !fits(p, role)) continue;
-      const k = `${role}|${slotKey(p.cellId, p.slot)}`;
-      if (seen.has(k)) continue;
-      if (role === 'back-support' && !seen.has(`back|${slotKey(p.cellId, p.slot)}`)) continue;
-      seen.add(k);
-      kept.add(p.id);
-    }
+    if (roleOf(p) !== 'back' || !cell || usualBackCushions(cell) === 0 || p.slot < 0) continue;
+    const mine = cushionsByCell.get(p.cellId) ?? [];
+    if (mine.some((q) => q.slot === p.slot)) continue;
+    cushionsByCell.set(p.cellId, [...mine, p]);
   }
-  return kept.size === placed.length ? (placed as PlacedAccessory[]) : placed.filter((p) => kept.has(p.id));
+  const cushionSlot = new Map<string, number>(); // piece id → its place
+  const movedTo = new Map<string, number>(); // the place a cushion had → its place now
+  for (const [cellId, mine] of cushionsByCell) {
+    const usual = usualBackCushions(cellById.get(cellId)!);
+    const sorted = [...mine].sort((a, b) => a.slot - b.slot);
+    const onSeats = sorted.length <= usual && sorted.every((p) => p.slot < usual);
+    sorted.forEach((p, i) => {
+      const slot = onSeats ? p.slot : i;
+      cushionSlot.set(p.id, slot);
+      movedTo.set(slotKey(cellId, p.slot), slot);
+    });
+  }
+  const out: PlacedAccessory[] = [];
+  const taken = new Set<string>();
+  let changed = false;
+  for (const p of placed) {
+    const role = roleOf(p);
+    const cell = cellById.get(p.cellId);
+    let slot: number | undefined;
+    if (!role || !cell) slot = undefined;
+    else if (role === 'back') slot = cushionSlot.get(p.id);
+    else if (role === 'back-support') slot = movedTo.get(slotKey(p.cellId, p.slot));
+    else slot = isOpenEnd(cell, p.slot, cells, depth) ? p.slot : undefined;
+    const k = `${role}|${slotKey(p.cellId, slot ?? -1)}`;
+    if (slot == null || taken.has(k)) { changed = true; continue; }
+    taken.add(k);
+    if (slot !== p.slot) changed = true;
+    out.push(slot === p.slot ? p : { ...p, slot });
+  }
+  return changed ? out : (placed as PlacedAccessory[]);
 }
 
 /** Where each piece is drawn, in canvas cm. A back cushion moves forward when
- *  its seat also has a back support behind it. */
+ *  a back support is behind it. */
 export function accessoryRects(
   placed: readonly PlacedAccessory[],
   cells: readonly Cell[],
@@ -377,6 +465,7 @@ export function accessoryRects(
 ): Array<{ id: string; cellId: string; role: SofaAccessoryRole; rect: Bbox }> {
   const cellById = new Map(cells.filter((c) => c.id).map((c) => [c.id as string, c]));
   const supported = occupied(placed, options, 'back-support');
+  const cushions = cushionSlotsByCell(placed, options);
   const out: Array<{ id: string; cellId: string; role: SofaAccessoryRole; rect: Bbox }> = [];
   for (const p of placed) {
     const o = options.get(p.modelId);
@@ -384,10 +473,14 @@ export function accessoryRects(
     if (!o || !cell) continue;
     let rect: Bbox | null;
     if (o.role === 'arm') rect = armRect(cell, p.slot, depth, o.armWidthCm);
-    else if (o.role === 'back-support') rect = seatStrip(cell, p.slot, depth, BACKREST_CM, SUPPORT_CM);
     else {
-      const from = supported.has(slotKey(p.cellId, p.slot)) ? BACKREST_CM + SUPPORT_CM : BACKREST_CM;
-      rect = seatStrip(cell, p.slot, depth, from, CUSHION_CM);
+      const columns = columnsFor(cell, cushions.get(p.cellId) ?? []);
+      const back = backrestCm(cell);
+      if (o.role === 'back-support') rect = seatStrip(cell, p.slot, columns, depth, back, SUPPORT_CM);
+      else {
+        const from = supported.has(slotKey(p.cellId, p.slot)) ? back + SUPPORT_CM : back;
+        rect = seatStrip(cell, p.slot, columns, depth, from, CUSHION_CM);
+      }
     }
     if (rect) out.push({ id: p.id, cellId: p.cellId, role: o.role, rect });
   }

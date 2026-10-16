@@ -255,24 +255,40 @@ describe('STOOL accessory module', () => {
   });
 });
 
-describe('length-sold sofas (8210: 7FT / 6FT / 5FT / 4FT)', () => {
-  it('are whole units at the length they are sold as, at every seat depth', () => {
-    const want: Record<string, [number, number]> = { '7FT': [213, 3], '6FT': [183, 3], '5FT': [152, 2], '4FT': [122, 2] };
-    for (const [id, [cm, seats]] of Object.entries(want)) {
+describe('length-sold bare bases (8210: 7FT / 6FT / 5FT / 4FT)', () => {
+  it('are bare bases at the length they are sold as, at every seat depth', () => {
+    const want: Record<string, [number, number]> = { '7FT': [213, 5], '6FT': [183, 4], '5FT': [152, 3], '4FT': [122, 2] };
+    for (const [id, [cm, lines]] of Object.entries(want)) {
       const m = findModule(id)!;
-      expect(m.cushions).toBe(seats);
+      expect(m.bare).toBe(true);
+      expect(m.designLines).toBe(lines);
+      expect(m.group).toBe('By length');
+      expect(classifySofaCompartment(id)).toBe('By length');
       expect(moduleFootprint(m, 0, '24').w).toBe(cm);
       expect(moduleFootprint(m, 0, '32').w).toBe(cm); // a 3S would grow 60cm here
       expect(moduleFootprint(m, 90, '28')).toEqual({ w: 95, h: cm });
+      // no arms of their own; the back is where back cushions go
+      expect(cellEdges({ moduleId: id, x: 0, y: 0, rot: 0 })).toEqual(['open', 'back', 'open', 'front']);
     }
   });
 
-  it('close on their own (an arm each end) and draw with their own art', () => {
+  it('are a whole sofa with or without clip-on arms', () => {
     const lone: Cell[] = [{ id: 'a', moduleId: '7FT', x: 0, y: 0, rot: 0 }];
-    expect(analyzeSofa(lone, '24').closed).toBe(true);
+    expect(analyzeSofa(lone, '24')).toMatchObject({ closed: true, reason: null });
+    expect(analyzeSofa(lone, '24', { extraArms: [{ cellId: 'a', edge: EDGE_W, widthCm: 20 }] }).closed).toBe(true);
+    // two bases end to end make one longer sofa
+    const two: Cell[] = [...lone, { id: 'b', moduleId: '4FT', x: 213, y: 0, rot: 0 }];
+    expect(groupSofas(two, '24')).toHaveLength(1);
+    expect(analyzeSofa(two, '24').closed).toBe(true);
+    // an armless seat next to one still needs its arm
+    const mixed: Cell[] = [...lone, { id: 'c', moduleId: '1NA', x: 213, y: 0, rot: 0 }];
+    expect(analyzeSofa(mixed, '24').closed).toBe(false);
+  });
+
+  it('draw with their own art, and a renamed variant keeps the shape', () => {
     expect(representativeArtCode('6FT')).toBe('6FT');
-    // a renamed variant keeps the family's shape
-    expect(findModule('5FT(EXTEND)')?.w).toBe(152);
+    expect(findModule('5FT(EXTEND)')).toMatchObject({ w: 152, bare: true });
+    expect(classifySofaCompartment('5FT(EXTEND)')).toBe('By length');
   });
 });
 
