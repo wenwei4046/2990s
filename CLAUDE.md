@@ -553,6 +553,29 @@ modules the way the repo's bundle detection does (whole-piece 1S/2S/3S, 1B/2B as
 
 ---
 
+## Sofa Accessories — pieces on the Custom build (2026-10-16)
+
+Houzs category `FABRIC_ACCESSORY`, shown as "Sofa Accessory" (their #3857). Owner
+2026-10-16: sold from the sofa **Custom build canvas only** (hidden from the standalone
+catalogue), as pieces that attach to the modules — back cushion (one a seat), back
+support (stacks behind a cushion on the same seat; SB01 "sand back"), extra arm (clips
+onto an armless end; AR01). Engine + reasons: `apps/pos/src/lib/sofa-accessories.ts`.
+
+- 🔑 **Every piece is its OWN cart line and SO line** — its SKU, its exact
+  `sell_price_sen` (never rounded — Houzs re-prices from the same field, 0.5% gate),
+  `item_group: fabric_accessory`, fabric keys only. **Never fold one into the sofa's
+  `cells` like HEADREST:** Houzs splits a build into `{MODEL}-{cell}` rows, and `AR01` is
+  no Model's module. The lines hang off the sofa line (`accessoryOfKey`): qty, removal
+  and edits follow the sofa; the cart locks them.
+- Two settings, both in `allowed_options` (Houzs stores unknown keys as sent and its
+  screens keep them): the accessory Model's `placement` (`back` / `back-support` /
+  `arm` + `armWidthCm`; until set, guessed from the name) and the sofa Model's
+  `sofa_accessories` (accessory **Model ids**, so a Houzs code rename can't strand them).
+- ⚠️ **Colour KIV gap:** a piece sold with its colour KIV can't be completed from POS
+  My Orders (`TbcLineEditor` fills sofa/bedframe fabric only), and Houzs's `tbc-update`
+  copies a sofa's confirmed colour to sofa lines only — the accessory line stays KIV and
+  blocks the Processing Date until filled in Houzs ERP.
+
 ## Sofa combos — the POS's own table inside Houzs (since 2026-09-26)
 
 **Owner ruling 2026-09-26: Houzs's combos are Houzs's COST; ours are the POS's
