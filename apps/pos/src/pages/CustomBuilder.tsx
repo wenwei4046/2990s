@@ -1060,11 +1060,11 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
 
   const allClosed = analyses.every((a) => a.closed);
   // What this Model's sofas must carry before they can be ordered — Modular ›
-  // Needed to order (owner 2026-10-16): pieces ticked from the same list as
-  // "Sofa accessories". Checked on every path that orders a sofa (not
-  // Marketing's layout). Pieces can be added only here, on a new order; an
-  // exchange also counts the pieces already on the order, which it keeps
-  // (`orderPieces`).
+  // Needed to order (owner 2026-10-16): kinds ticked out of those it offers,
+  // here as every offered piece of them (any one will do). Checked on every
+  // path that orders a sofa (not Marketing's layout). Pieces can be added only
+  // here, on a new order; an exchange also counts the pieces already on the
+  // order, which it keeps (`orderPieces`).
   const accessoriesNeeded = useMemo(
     () => (layoutOnly ? [] : modelCustomizer?.accessoriesNeeded ?? []),
     [layoutOnly, modelCustomizer],

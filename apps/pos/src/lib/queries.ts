@@ -1169,8 +1169,9 @@ export interface SofaCustomizerData {
    *  sofa_accessories), each resolved to its sellable SKU — lib/sofa-accessories.ts.
    *  One the catalogue no longer sells (SKU or Model switched off) is left out. */
   accessories:  SofaAccessoryOption[];
-  /** The ones each sofa must carry before it can be ordered (allowed_options.
-   *  sofa_accessories_needed, a subset of `accessories`); empty = nothing. */
+  /** The ones that do for what each sofa must carry before it can be ordered:
+   *  every piece of `accessories` of a kind ticked in allowed_options.
+   *  sofa_accessories_needed — alternatives within a kind; empty = nothing. */
   accessoriesNeeded: SofaAccessoryOption[];
   /** The Model row that resolved (so caller can show Model name / branding). */
   modelId:      string;
@@ -1340,6 +1341,8 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
           armWidthCm: placement?.armWidthCm ?? DEFAULT_ARM_WIDTH_CM,
         }];
       });
+      // Needed to order is kept by kind: any piece of a needed kind will do.
+      const neededKinds = readSofaAccessoriesNeeded(model.allowed_options, accessories);
 
       return {
         compartments,
@@ -1351,7 +1354,7 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
         // Empty array = no fabrics configured → Configurator hides fabric picker.
         fabricIds:  (allowed as { fabrics?: string[] }).fabrics ?? [],
         accessories,
-        accessoriesNeeded: readSofaAccessoriesNeeded(model.allowed_options, accessories),
+        accessoriesNeeded: accessories.filter((a) => neededKinds.includes(a.role)),
         modelId:    model.id,
         modelName:  model.name,
         modelCode:  model.model_code,

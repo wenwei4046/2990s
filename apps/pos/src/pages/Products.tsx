@@ -129,9 +129,11 @@ import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/p
 import { compareProductCategories, isSingleSkuCategory, productCategoryChips, productCategoryLabel } from '../lib/products/product-categories';
 import {
   DEFAULT_ARM_WIDTH_CM,
+  NEEDED_KIND_LABEL,
   SOFA_ACCESSORY_ROLE_LABEL,
   describeNeeded,
   guessAccessoryRole,
+  neededKindsOf,
   readAccessoryPlacement,
   readSofaAccessoriesNeeded,
   readSofaAccessoryIds,
@@ -1276,11 +1278,13 @@ const ModelAllowedOptionsDrawer = ({
       .filter((a) => a.active || tickedAccessories.has(a.id))
       .map((a) => ({ id: a.id, label: a.active ? a.name : `${a.name} (off)` }))
     : [];
-  // Needed to order ticks from the same list (owner 2026-10-16: "supposed to be
-  // synchronized, same as the accessory table"): only the accessories ticked
-  // above show, in the same order, and unticking one above drops it here too.
-  const offeredAccessories = sofaAccessoryPool
-    .filter((a) => tickedAccessories.has(a.id))
+  // Needed to order goes by kind — arm rest, back cushion, back support (owner
+  // 2026-10-16: "by category, not by its SKU") — read off the accessories
+  // ticked above and kept in step with them ("supposed to be synchronized"): a
+  // kind shows while a piece of it is ticked there, and unticking its last
+  // piece drops it here too.
+  const offeredFrom = (ids: readonly string[]) => sofaAccessoryPool
+    .filter((a) => ids.includes(a.id))
     .map((a) => {
       const row = (accessoryModels.data ?? []).find((x) => x.id === a.id);
       const role: SofaAccessoryRole = row
@@ -1288,35 +1292,40 @@ const ModelAllowedOptionsDrawer = ({
         : 'back';
       return { modelId: a.id, role, code: a.label };
     });
+  const offeredAccessories = offeredFrom([...tickedAccessories]);
+  const neededKindPool = neededKindsOf(offeredAccessories);
 
   const d = draft ?? {};
-  const neededAccessories = readSofaAccessoriesNeeded(d, offeredAccessories);
-  const neededIds = new Set(neededAccessories.map((a) => a.modelId));
-  const neededHint = neededAccessories.length === 0
+  const neededKinds = readSofaAccessoriesNeeded(d, offeredAccessories);
+  const neededHint = neededKinds.length === 0
     ? 'Nothing ticked — sofas can be ordered with or without accessories.'
-    : `Before it can be ordered, each sofa needs ${describeNeeded(neededAccessories)}.`
-      + (neededAccessories.some((a) => a.role === 'arm') ? ' An arm built into the sofa counts as an arm rest.' : '')
-      + (neededAccessories.some((a, i) => neededAccessories.findIndex((b) => b.role === a.role) !== i)
-        ? ' Pieces of the same kind are alternatives — any one of them will do.' : '');
-  const toggleNeeded = (id: string) => setDraft((prev) => {
-    const next: AllowedOptions = JSON.parse(JSON.stringify(prev ?? {}));
-    const cur = new Set(readSofaAccessoriesNeeded(next, offeredAccessories).map((a) => a.modelId));
-    if (cur.has(id)) cur.delete(id);
-    else cur.add(id);
-    if (cur.size > 0) next.sofa_accessories_needed = offeredAccessories.map((a) => a.modelId).filter((x) => cur.has(x));
+    : `Before it can be ordered, each sofa needs ${describeNeeded(offeredAccessories.filter((a) => neededKinds.includes(a.role)))}.`
+      + (neededKinds.includes('arm') ? ' An arm built into the sofa counts as an arm rest.' : '');
+  // Stored as the kinds, in the order shown; none = no key.
+  const writeNeeded = (next: AllowedOptions, kinds: readonly SofaAccessoryRole[]) => {
+    if (kinds.length > 0) next.sofa_accessories_needed = [...kinds];
     else delete next.sofa_accessories_needed;
+  };
+  const toggleNeeded = (kind: SofaAccessoryRole) => setDraft((prev) => {
+    const next: AllowedOptions = JSON.parse(JSON.stringify(prev ?? {}));
+    const offered = offeredFrom(readSofaAccessoryIds(next));
+    const on = new Set(readSofaAccessoriesNeeded(next, offered));
+    if (on.has(kind)) on.delete(kind);
+    else on.add(kind);
+    writeNeeded(next, neededKindsOf(offered).filter((k) => on.has(k)));
     return next;
   });
-  // Ticking a sofa accessory on/off; one no longer offered is no longer needed.
+  // Ticking a sofa accessory on/off; a kind with no piece left is no longer needed.
   const toggleOffered = (id: string) => setDraft((prev) => {
     const next: AllowedOptions = JSON.parse(JSON.stringify(prev ?? {}));
-    const offered = readSofaAccessoryIds(next);
-    const on = offered.includes(id);
-    next.sofa_accessories = on ? offered.filter((x) => x !== id) : [...offered, id];
-    if (on && Array.isArray(next.sofa_accessories_needed)) {
-      const left = next.sofa_accessories_needed.filter((x) => x !== id);
-      if (left.length > 0) next.sofa_accessories_needed = left;
-      else delete next.sofa_accessories_needed;
+    const ids = readSofaAccessoryIds(next);
+    const on = ids.includes(id);
+    const was = readSofaAccessoriesNeeded(next, offeredFrom(ids));
+    const after = on ? ids.filter((x) => x !== id) : [...ids, id];
+    next.sofa_accessories = after;
+    if (on && was.length > 0) {
+      const left = neededKindsOf(offeredFrom(after));
+      writeNeeded(next, was.filter((k) => left.includes(k)));
     }
     return next;
   });
@@ -1477,14 +1486,14 @@ const ModelAllowedOptionsDrawer = ({
               onToggle={toggleOffered}
             />
           )}
-          {isSofa && offeredAccessories.length > 0 && (
+          {isSofa && neededKindPool.length > 0 && (
             <div style={{ marginBottom: 'var(--space-4)' }}>
               <AllowedOptionsSection
                 label="Needed to order"
-                pool={offeredAccessories.map((a) => a.modelId)}
-                labelOf={(id) => offeredAccessories.find((a) => a.modelId === id)?.code ?? id}
-                isTicked={(v) => neededIds.has(v)}
-                onToggle={toggleNeeded}
+                pool={neededKindPool}
+                labelOf={(k) => NEEDED_KIND_LABEL[k as SofaAccessoryRole]}
+                isTicked={(k) => neededKinds.includes(k as SofaAccessoryRole)}
+                onToggle={(k) => toggleNeeded(k as SofaAccessoryRole)}
               />
               <p className={styles.eyebrow} style={{ marginTop: 'calc(-1 * var(--space-2))' }}>{neededHint}</p>
             </div>

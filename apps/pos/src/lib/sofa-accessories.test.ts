@@ -11,6 +11,7 @@ import {
   guessAccessoryRole,
   moveAccessory,
   nearestSlotFor,
+  neededKindsOf,
   nextSlotFor,
   orderHave,
   orderPiecesByModel,
@@ -67,16 +68,37 @@ describe('reading the Model settings', () => {
     expect(readSofaAccessoryIds({})).toEqual([]);
   });
 
-  it('reads the pieces a sofa must carry, out of those it offers', () => {
+  it('offers a kind for each kind of piece the sofa offers, in a fixed order', () => {
+    const MF = opt('bc06-mf', 'back');
+    expect(neededKindsOf([SB, MF, BC, AR])).toEqual(['arm', 'back', 'back-support']);
+    expect(neededKindsOf([MF, BC])).toEqual(['back']);
+    expect(neededKindsOf([])).toEqual([]);
+  });
+
+  it('reads the kinds a sofa must carry, out of those it offers', () => {
     const offered = [BC, SB, AR];
-    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: ['ar01', 'bc06'] }, offered)).toEqual([BC, AR]);
-    // a piece no longer offered no longer counts
-    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: ['ar01', 'gone'] }, [BC])).toEqual([]);
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: ['back-support', 'arm'] }, offered)).toEqual(['arm', 'back-support']);
+    // a kind the sofa no longer offers no longer counts
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: ['arm', 'back'] }, [BC])).toEqual(['back']);
     expect(readSofaAccessoriesNeeded({}, offered)).toEqual([]);
-    // #818 stored a word: it reads as the offered pieces of those kinds
-    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'full_set' }, offered)).toEqual([BC, AR]);
-    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'back_cushions' }, offered)).toEqual([BC]);
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: ['seat', 3, null] }, offered)).toEqual([]);
+    // #819 stored accessory Model ids: each reads as its piece's kind
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: ['bc06', 'sb01'] }, offered)).toEqual(['back', 'back-support']);
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: ['ar01', 'gone'] }, [BC])).toEqual([]);
+    // #818 stored a word: it reads as those kinds
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'full_set' }, offered)).toEqual(['arm', 'back']);
+    expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'back_cushions' }, offered)).toEqual(['back']);
     expect(readSofaAccessoriesNeeded({ sofa_accessories_needed: 'everything' }, offered)).toEqual([]);
+  });
+
+  it('a needed kind takes any piece of it — one ticked by id under #819 included', () => {
+    const MF = opt('bc06-mf', 'back');
+    const offered = [BC, MF, SB];
+    const kinds = readSofaAccessoriesNeeded({ sofa_accessories_needed: ['bc06-mf'] }, offered);
+    const needed = offered.filter((o) => kinds.includes(o.role));
+    expect(needed).toEqual([BC, MF]);
+    expect(accessoriesStillNeeded(needed, { armEachEnd: false, pieces: new Set(['bc06']) })).toBeNull();
+    expect(accessoriesStillNeeded(needed, { armEachEnd: false, pieces: new Set(['sb01']) })?.full).toBe('Needs a back cushion (BC06 or BC06-MF)');
   });
 });
 
@@ -103,7 +125,7 @@ describe('what a sofa must carry to be ordered', () => {
   it('pieces of one kind are alternatives', () => {
     expect(accessoriesStillNeeded([BC, MF], { armEachEnd: false, pieces: new Set(['bc06-mf']) })).toBeNull();
     expect(accessoriesStillNeeded([BC, MF], nothing)?.full).toBe('Needs a back cushion (BC06 or BC06-MF)');
-    // only the ticked one does
+    // a piece outside the list does not count
     expect(accessoriesStillNeeded([BC], { armEachEnd: false, pieces: new Set(['bc06-mf']) })?.full).toBe('Needs a back cushion (BC06)');
   });
 
