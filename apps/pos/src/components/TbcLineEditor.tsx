@@ -226,6 +226,13 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
   const productId = product.data?.id;
   const category: 'SOFA' | 'BEDFRAME' | null =
     target.itemGroup === 'sofa' ? 'SOFA' : target.itemGroup === 'bedframe' ? 'BEDFRAME' : null;
+  /* A Sofa Accessory line (owner 2026-10-16, lib/sofa-accessories.ts) — sold
+     with its colour KIV, it needs it filled here: Houzs's tbc-update copies a
+     sofa's confirmed colour to the sofa's own lines only, and an open colour on
+     this line blocks the Processing Date. Fabric only, and no tier add-on —
+     Houzs charges none on a Sofa Accessory (so `category` stays null for the
+     price difference below). */
+  const isAccessory = target.itemGroup === 'fabric_accessory';
 
   /* ── Fabric (sofa + bedframe) ─────────────────────────────────────── */
   const fabricLib = useFabricLibrary();
@@ -255,11 +262,17 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
     () => resolveFabricTierOverride((target.buildCells ?? []).map((c) => c.moduleId).filter(Boolean), baseModelOverride, compartmentOverrideMap),
     [target.buildCells, baseModelOverride, compartmentOverrideMap],
   );
-  const allowedFabricCodes = allowedFabricsQ.data ?? [];
+  // A Sofa Accessory's own Model ticks no fabrics — to Houzs an empty pool is no
+  // restriction — so it offers every active colour; its colour is its own.
+  const allowedFabricCodes = useMemo(() => {
+    const ticked = allowedFabricsQ.data ?? [];
+    if (!isAccessory || ticked.length > 0) return ticked;
+    return (fabricColours.data ?? []).filter((c) => c.active !== false).map((c) => c.colourId);
+  }, [allowedFabricsQ.data, isAccessory, fabricColours.data]);
   // Series rows offered on this Model — same construction the Configurator
   // uses (allowed colour codes → their series, joined to the library).
   const fabricRows = useMemo<ProductFabricRow[]>(() => {
-    if (!category) return [];
+    if (!category && !isAccessory) return [];
     const enabled = new Set(allowedFabricCodes);
     const fabricIds = new Set(
       (fabricColours.data ?? []).filter((c) => enabled.has(c.colourId)).map((c) => c.fabricId),
@@ -267,7 +280,7 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
     return (fabricLib.data ?? [])
       .filter((f) => fabricIds.has(f.id))
       .map((f) => ({ fabricId: f.id, active: f.active, surcharge: f.defaultSurcharge }));
-  }, [category, allowedFabricCodes, fabricColours.data, fabricLib.data]);
+  }, [category, isAccessory, allowedFabricCodes, fabricColours.data, fabricLib.data]);
 
   // undefined = untouched (line keeps its stored pick); null = cleared.
   const [fabricSel, setFabricSel] = useState<FabricSelection | null | undefined>(undefined);
@@ -480,15 +493,15 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
 
   return (
     <div className={styles.editor}>
-      {category && fabricRows.length > 0 && (
+      {(category || isAccessory) && fabricRows.length > 0 && (
         <FabricColourPicker
           productFabrics={fabricRows}
           fabricId={shownFabricId}
           colourId={shownColourId}
           onChange={(next) => setFabricSel(next)}
-          category={category}
-          addonConfig={addonCfgQ.data ?? null}
-          modelOverride={modelFabricOverride}
+          category={category ?? 'SOFA'}
+          addonConfig={isAccessory ? null : addonCfgQ.data ?? null}
+          modelOverride={isAccessory ? null : modelFabricOverride}
           enabledColourIds={allowedFabricCodes}
           optional
           onClear={() => setFabricSel(null)}

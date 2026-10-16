@@ -51,6 +51,9 @@ describe('shapeName (real modules, read as the repo reads bundles)', () => {
     [['1B(LHF)', 'CNR', '2A(RHF)'], 'Custom-made'],
     [['L(LHF)', '1NA', 'L(RHF)'], 'Custom-made'],
     [['HEADREST'], 'Custom-made'],
+    // 8210, sold by length (2026-10-16)
+    [['7FT'], '7FT sofa'],
+    [['4FT'], '4FT sofa'],
   ])('%j → %s', (mods, name) => {
     expect(shapeName(mods)).toBe(name);
   });
