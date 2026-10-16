@@ -46,10 +46,11 @@ export const PAYMENT_METHOD_CODE_TO_VALUE: Readonly<Record<PaymentMethodCode, st
 
 /** Display-label fallbacks — used before the maintenance fetch lands or if a
  *  row is somehow missing. The LIVE labels come from the payment_method rows;
- *  these mirror the seeds in migration 0156. */
+ *  these mirror the seeds in migration 0156, as re-labelled by 0217
+ *  ('Bank transfer / DuitNow' → 'Bank transfer', Loo 2026-09-15). */
 export const PAYMENT_METHOD_DEFAULT_LABELS: Readonly<Record<PaymentMethodCode, string>> = {
   merchant:    'Merchant',
-  transfer:    'Bank transfer / DuitNow',
+  transfer:    'Bank transfer',
   installment: 'Installment',
   cash:        'Cash',
 };
