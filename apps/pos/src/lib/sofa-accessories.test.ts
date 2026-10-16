@@ -63,31 +63,40 @@ describe('reading the Model settings', () => {
   });
 });
 
+/** Tap "+" `times` times; the places it picked, as `${cellId}${slot}`. */
+const tap = (option: SofaAccessoryOption, cells: Cell[], times: number, start: PlacedAccessory[] = []) => {
+  let placed = start;
+  const order: string[] = [];
+  for (let i = 0; i < times; i++) {
+    const s = nextSlotFor(option, cells, placed, options, '24');
+    if (!s) break;
+    order.push(`${s.cellId}${s.slot}`);
+    placed = pruneAccessories([...placed, piece(option.modelId, s.cellId, s.slot)], cells, options, '24');
+  }
+  return { order, placed };
+};
+
 describe('where "+" puts a piece', () => {
-  it('fills back cushions seat by seat, left to right, then stops', () => {
-    let placed: PlacedAccessory[] = [];
-    const order: string[] = [];
-    for (let i = 0; i < 4; i++) {
-      const s = nextSlotFor(BC, threeSeater, placed, options, '24');
-      if (!s) break;
-      order.push(`${s.cellId}${s.slot}`);
-      placed = [...placed, piece('bc06', s.cellId, s.slot)];
-    }
-    expect(order).toEqual(['a0', 'b0', 'c0']);
+  it('fills back cushions seat by seat, then keeps going — there is no limit', () => {
+    // seats first, left to right; then one more wherever a cushion has the most room
+    expect(tap(BC, threeSeater, 6).order).toEqual(['a0', 'b0', 'c0', 'a1', 'c1', 'b1']);
+    expect(tap(BC, threeSeater, 40).placed).toHaveLength(40);
   });
 
-  it('puts one cushion per seat of a 2-seater module', () => {
+  it('puts one cushion per seat of a 2-seater module, then shares its back out', () => {
     const two: Cell[] = [{ id: 'z', moduleId: '2A(LHF)', x: 0, y: 0, rot: 0 }];
-    const first = nextSlotFor(BC, two, [], options, '24');
-    const second = nextSlotFor(BC, two, [piece('bc06', 'z', 0)], options, '24');
-    expect([first, second]).toEqual([{ cellId: 'z', slot: 0 }, { cellId: 'z', slot: 1 }]);
+    expect(tap(BC, two, 3).order).toEqual(['z0', 'z1', 'z2']);
   });
 
-  it('only stacks a back support where a back cushion already is', () => {
+  it('only stacks a back support where a back cushion already is, one behind each', () => {
     expect(nextSlotFor(SB, threeSeater, [], options, '24')).toBeNull();
     const placed = [piece('bc06', 'b', 0)];
     expect(nextSlotFor(SB, threeSeater, placed, options, '24')).toEqual({ cellId: 'b', slot: 0 });
     expect(nextSlotFor(SB, threeSeater, [...placed, piece('sb01', 'b', 0)], options, '24')).toBeNull();
+    // past the seats too: four cushions on a 7FT take four supports
+    const base: Cell[] = [{ id: 'f', moduleId: '7FT', x: 0, y: 0, rot: 0 }];
+    const { placed: four } = tap(BC, base, 4);
+    expect(tap(SB, base, 6, four).order).toEqual(['f0', 'f1', 'f2', 'f3']);
   });
 
   it('clips an extra arm onto armless ends only', () => {
@@ -130,6 +139,56 @@ describe('drawing the pieces', () => {
   it('draws an extra arm outside the end it closes', () => {
     const [left] = accessoryRects([piece('ar01', 'a', 0)], armless, options, '24');
     expect(left!.rect).toEqual({ x: 80, y: 100, w: 20, h: 95 });
+  });
+
+  it('shares the back out evenly once a module has more cushions than seats', () => {
+    const two: Cell[] = [{ id: 'z', moduleId: '1NA', x: 0, y: 0, rot: 0 }];
+    const { placed } = tap(BC, two, 3);
+    const xs = accessoryRects(placed, two, options, '24').map((r) => [r.rect.x, r.rect.w]);
+    // 1NA is 75 wide: three shares of 25, a 1.5cm gap each side
+    expect(xs).toEqual([[1.5, 22], [26.5, 22], [51.5, 22]]);
+  });
+});
+
+describe('a bare base (8210 7FT…4FT): no backrest, no arms', () => {
+  const base: Cell[] = [{ id: 'f', moduleId: '7FT', x: 100, y: 100, rot: 0 }];
+
+  it('takes back cushions right at its back, as many as wanted', () => {
+    const { order, placed } = tap(BC, base, 5);
+    expect(order).toEqual(['f0', 'f1', 'f2', 'f3', 'f4']);
+    const rects = accessoryRects(placed, base, options, '24');
+    expect(rects.every((r) => r.rect.y === 100)).toBe(true);
+    // 213cm shared five ways
+    expect(rects.map((r) => Math.round(r.rect.w * 10) / 10)).toEqual([39.6, 39.6, 39.6, 39.6, 39.6]);
+    // a support goes right at the back and moves its cushion forward
+    const cushion = placed[0]!;
+    const withSupport = [...placed, piece('sb01', 'f', cushion.slot)];
+    const drawn = accessoryRects(withSupport, base, options, '24');
+    expect(drawn.find((r) => r.role === 'back-support')!.rect.y).toBe(100);
+    expect(drawn.find((r) => r.id === cushion.id)!.rect.y).toBe(108);
+  });
+
+  it('takes an extra arm at either end', () => {
+    expect(tap(AR, base, 3).order).toEqual(['f0', 'f2']);
+  });
+
+  it('a drop anywhere along a full back adds one more there', () => {
+    const { placed } = tap(BC, base, 3);
+    const dragged = piece('bc06', 'f', 9);
+    // the far left of the back, 140cm from where a fourth would end up
+    expect(nearestSlotFor(BC, { x: 110, y: 110 }, base, [...placed, dragged], options, '24', dragged.id)).toEqual({ cellId: 'f', slot: 3 });
+  });
+
+  it('closes up the places when a cushion is taken off, its support going with it', () => {
+    const { placed } = tap(BC, base, 4);
+    const supports = placed.map((p) => piece('sb01', 'f', p.slot));
+    const left = pruneAccessories([...placed, ...supports].filter((p) => p.id !== placed[1]!.id), base, options, '24');
+    const cushions = left.filter((p) => p.modelId === 'bc06').map((p) => p.slot);
+    const backed = left.filter((p) => p.modelId === 'sb01').map((p) => p.slot);
+    // three cushions left on a 7FT: back on its three usual places, supports with them
+    expect(cushions).toEqual([0, 1, 2]);
+    expect(backed).toEqual([0, 1, 2]);
+    expect(pruneAccessories(left, base, options, '24')).toBe(left);
   });
 });
 

@@ -1,16 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 190 110" width="190" height="110">
-  <title>2990s Sofa — 6FT — 183cm, 3 seats (arms BOTH sides)</title>
-  <desc>Top-down plan view, drawn to the length it is sold as (6FT ≈ 183cm). 3 seats with backrest at top + hard armrests on BOTH sides; dashed seams between seats.</desc>
+  <title>2990s Sofa Base — 6FT — 183cm, no backrest, no arms</title>
+  <desc>Top-down plan view, drawn to the length it is sold as (6FT ≈ 183cm). A bare seat base: no backrest and no armrests (back cushions and arms are added as Sofa Accessories). The 4 dashed lines are a stitching design, not seats.</desc>
   <g transform="translate(20,20)">
     <rect x="0" y="0" width="150" height="70" rx="3" fill="#F0E6D6" stroke="#2C2C2A" stroke-width="1.4"/>
-    <rect x="0" y="0" width="150" height="11" fill="#D9C2A0" stroke="#2C2C2A" stroke-width="0.8"/>
-    <!-- LEFT armrest -->
-    <rect x="0" y="0" width="11" height="70" fill="#B89972" stroke="#2C2C2A" stroke-width="0.8"/>
-    <!-- RIGHT armrest -->
-    <rect x="139" y="0" width="11" height="70" fill="#B89972" stroke="#2C2C2A" stroke-width="0.8"/>
-    <!-- Seat dividers -->
-    <line x1="53.7" y1="0" x2="53.7" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
-    <line x1="96.3" y1="0" x2="96.3" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
+    <!-- Design lines (stitching), evenly spaced -->
+    <line x1="30" y1="0" x2="30" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
+    <line x1="60" y1="0" x2="60" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
+    <line x1="90" y1="0" x2="90" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
+    <line x1="120" y1="0" x2="120" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
   </g>
 </svg>
