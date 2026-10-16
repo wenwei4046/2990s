@@ -20,6 +20,8 @@ export const models = [
   { ...commonModel, id: 'demo-model-protector-k', name: 'King waterproof mattress protector', model_code: 'PROTECTOR-K', category: 'ACCESSORY', description: 'Waterproof protection for a King mattress', allowed_options: {} },
   { ...commonModel, id: 'demo-model-protector-q', name: 'Queen waterproof mattress protector', model_code: 'PROTECTOR-Q', category: 'ACCESSORY', description: 'Waterproof protection for a Queen mattress', allowed_options: {} },
   { ...commonModel, id: 'demo-model-pillow', name: 'Contour pillow', model_code: 'CONTOUR-PILLOW', category: 'ACCESSORY', description: 'Supportive contour pillow', allowed_options: {} },
+  // Houzs's Sofa Accessory category (FABRIC_ACCESSORY) — one SKU per model.
+  { ...commonModel, id: 'demo-model-back-cushion', name: 'Back cushion', model_code: 'DEMO-BC', category: 'FABRIC_ACCESSORY', description: 'Loose back cushion in the sofa fabric', allowed_options: {} },
 ];
 const sku = (id: string, code: string, name: string, category: string, modelIndex: number, price: number, size: string | null = null, pwp: number | null = null) => ({
   id, code, name, category, model_id: models[modelIndex]!.id, base_model: models[modelIndex]!.model_code, description: models[modelIndex]!.description ?? 'Fictional demonstration product', branding: '2990', size_code: size, size_label: size === 'K' ? 'King · 183×190 cm' : size === 'Q' ? 'Queen · 152×190 cm' : null,
@@ -35,6 +37,7 @@ export const products = [
   sku('mfg-demo-protector-k', 'PROTECTOR-K', 'King waterproof mattress protector', 'ACCESSORY', 3, 15900),
   sku('mfg-demo-protector-q', 'PROTECTOR-Q', 'Queen waterproof mattress protector', 'ACCESSORY', 4, 15900),
   sku('mfg-demo-pillow', 'CONTOUR-PILLOW', 'Contour pillow', 'ACCESSORY', 5, 9900),
+  sku('mfg-demo-back-cushion', 'DEMO-BC', 'Back cushion', 'FABRIC_ACCESSORY', 6, 13500),
 ];
 export const categories = [['sofa', 'Sofas', 'sofa'], ['mattress', 'Mattresses', 'bed-double'], ['bedframe', 'Bedframes', 'bed'], ['accessory', 'Accessories', 'package']].map(([id, label, icon], sortOrder) => ({ id, label, icon, tbc: false, sortOrder }));
 export const fabrics = [['CG', 'CG', 'PRICE_1'], ['EZ', 'EZ', 'PRICE_2'], ['BF', 'BF', 'PRICE_1']].map(([id, label, tier], sortOrder) => ({ id, label, tier: 'standard', defaultSurcharge: 0, active: true, sortOrder, sofaTier: tier, bedframeTier: tier }));

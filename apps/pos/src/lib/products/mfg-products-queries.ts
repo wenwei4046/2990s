@@ -14,7 +14,14 @@ import { authedFetch } from '../apiClient';
 
 /* ────────────────────────── Types ────────────────────────────────────── */
 
-export type MfgCategory = 'BEDFRAME' | 'SOFA' | 'ACCESSORY' | 'MATTRESS' | 'SERVICE';
+/** Houzs's product category codes (its shared/product-categories.ts). The list
+ *  grows on their side without a change here, so any other string is legal too:
+ *  `string & {}` admits it while keeping the named codes' autocomplete. Labels
+ *  and chip order: ./product-categories.ts. */
+export type MfgCategory =
+  | 'SOFA' | 'BEDFRAME' | 'ACCESSORY' | 'FABRIC_ACCESSORY' | 'MATTRESS'
+  | 'BEDLINES' | 'DINING' | 'DIFFUSER' | 'CARPET' | 'SERVICE'
+  | (string & {});
 
 export type SofaPriceTier = 'PRICE_1' | 'PRICE_2' | 'PRICE_3';
 
