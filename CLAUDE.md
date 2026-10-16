@@ -569,10 +569,20 @@ extra arm (clips onto an armless end; AR01). Engine + reasons:
   `cells` like HEADREST:** Houzs splits a build into `{MODEL}-{cell}` rows, and `AR01` is
   no Model's module. The lines hang off the sofa line (`accessoryOfKey`): qty, removal
   and edits follow the sofa; the cart locks them.
-- Two settings, both in `allowed_options` (Houzs stores unknown keys as sent and its
+- Three settings, all in `allowed_options` (Houzs stores unknown keys as sent and its
   screens keep them): the accessory Model's `placement` (`back` / `back-support` /
-  `arm` + `armWidthCm`; until set, guessed from the name) and the sofa Model's
-  `sofa_accessories` (accessory **Model ids**, so a Houzs code rename can't strand them).
+  `arm` + `armWidthCm`; until set, guessed from the name), the sofa Model's
+  `sofa_accessories` (accessory **Model ids**, so a Houzs code rename can't strand them),
+  and the sofa Model's `sofa_accessories_needed` — Modular › **Needed to order**
+  (owner 2026-10-16): absent = nothing, `full_set` (an arm at each end + ≥1 back
+  cushion), `arms`, `back_cushions`. An arm built into a module counts.
+- 🔑 **"Needed to order" is checked on EVERY path that orders a sofa** (owner: "need
+  follow as well"), via `accessoriesStillNeeded`: the Custom canvas, **Quick Pick**,
+  **Add to this order** and the **sofa exchange** (Confirm Change). Pieces can only be
+  added on the Custom canvas of a new order, so Quick Pick says "switch to Customize"
+  and Add to this order is refused. An exchange keeps the order's other lines, so the
+  pieces already on it count (`useSoAccessoryPieces` → `orderPieceCounts`) — without
+  that, every exchange of such a Model would be refused. Houzs does not enforce it.
 - ⚠️ **A piece's KIV colour is filled on ITS OWN line.** POS My Orders does it since
   2026-10-16 (`TbcLineEditor`, `isAccessory`: every active colour when the accessory's
   Model ticks none, no tier add-on). Filling the sofa's colour does NOT reach its pieces:
