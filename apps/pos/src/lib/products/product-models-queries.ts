@@ -5,6 +5,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { MfgCategory } from './mfg-products-queries';
+import type { SofaAccessoryPlacement } from '../sofa-accessories';
 
 import { authedFetch } from '../apiClient';
 
@@ -40,6 +41,11 @@ export type AllowedOptions = {
       auto-generated SKU name. Set at New Model time or edited later via
       the Model detail page. */
   mattress_thickness_cm?: number;
+  /** SOFA only — Sofa Accessory MODEL ids offered on this Model's canvas
+   *  (owner 2026-10-16, lib/sofa-accessories.ts). */
+  sofa_accessories?:      string[];
+  /** FABRIC_ACCESSORY only — where the piece goes on the sofa. */
+  placement?:             SofaAccessoryPlacement;
 };
 
 export type ModelSkuRow = {

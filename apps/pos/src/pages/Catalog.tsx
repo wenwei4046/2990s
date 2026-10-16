@@ -168,6 +168,10 @@ function groupByBranding(cards: CatalogCard[]): { branding: string; items: Catal
 function buildCards(rows: MfgCatalogRow[]): CatalogCard[] {
   const groups = new Map<string, CatalogCard>();
   for (const r of rows) {
+    // Sofa Accessories are sold from a sofa's Custom build only (owner
+    // 2026-10-16): on their own they would reach Houzs with no fabric colour,
+    // which every Sofa Accessory line needs. lib/sofa-accessories.ts.
+    if (String(r.category) === 'FABRIC_ACCESSORY') continue;
     const key = r.modelId ?? r.id; // orphan SKUs (no model) get their own card
     const existing = groups.get(key);
     if (existing) {

@@ -60,6 +60,14 @@ export const REQUIRED_VARIANT_AXES_BY_CATEGORY: Record<string, readonly VariantA
     { key: 'legHeight',   label: 'Leg Height',   aliases: ['legHeight', 'sofaLegHeight'], required: false },
     { key: 'fabricCode',  label: 'Fabrics',      aliases: ['fabricCode', 'colorCode', 'colourCode', 'fabricColor'] },
   ],
+  // Sofa Accessory (Houzs FABRIC_ACCESSORY, their owner 2026-09-14: "it only
+  // needs a colour"). Copied from Houzs's so-variant-rule so the POS handover's
+  // TBC check sees what Houzs's Processing-Date gate will: a back cushion whose
+  // colour is still KIV must not ride into a Processing Date. 2990's own API
+  // has no such category, so this changes nothing there.
+  fabric_accessory: [
+    { key: 'fabricCode',  label: 'Fabrics',      aliases: ['fabricCode', 'colorCode', 'colourCode', 'fabricColor'] },
+  ],
 };
 
 const isEmpty = (val: unknown): boolean =>

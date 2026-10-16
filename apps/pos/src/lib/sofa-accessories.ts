@@ -1,0 +1,523 @@
+// ----------------------------------------------------------------------------
+// sofa-accessories — Sofa Accessory pieces placed on the Custom Build canvas.
+//
+// A Sofa Accessory is Houzs's product category FABRIC_ACCESSORY (shown as
+// "Sofa Accessory", their #3857). Owner 2026-10-16: they are sold from the sofa
+// canvas only, where each piece attaches to a module:
+//   - back cushion (BC06, BC06-MF) — on a seat, against its backrest; one a seat;
+//   - back support (SB01 "sand back") — stacks behind the back cushion on the
+//     SAME seat, so that seat needs its back cushion first; one a seat;
+//   - arm (AR01) — an extra arm clipped onto an ARMLESS end (1NA, 2NA…). The
+//     sofa gets wider by it, and that end counts as having an arm.
+// Which of the three a piece is lives on the accessory's Model
+// (allowed_options.placement, set in Modular); which accessories a sofa offers
+// lives on the sofa's Model (allowed_options.sofa_accessories = accessory Model
+// ids). Both keys are ours: Houzs stores allowed_options as it is sent and its
+// own screens keep keys they do not know.
+//
+// ON THE ORDER every accessory is its own Sales Order line — its own SKU, its
+// own selling price, its own fabric colour (the sofa's unless the salesperson
+// picks another). It is never a cell of the sofa: Houzs splits a sofa build
+// into {MODEL}-{cell} rows, and AR01 is no Model's module. Houzs re-prices the
+// line from the accessory's sell_price_sen with no fabric-tier add-on and books
+// it as item_group fabric_accessory (lib/pos-handover-so.ts).
+//
+// A piece is kept against its module (cellId + slot), so it moves and turns
+// with it; pruneAccessories drops a piece whose module or slot is gone.
+// ----------------------------------------------------------------------------
+
+import {
+  cellBbox,
+  cellEdges,
+  edgeContacts,
+  findModule,
+  isAccessoryModule,
+  lCapEdgeOf,
+  moduleFootprint,
+  type Bbox,
+  type Cell,
+  type Depth,
+  type EdgeIdx,
+  type ExtraArm,
+} from '@2990s/shared';
+
+export type SofaAccessoryRole = 'back' | 'back-support' | 'arm';
+
+export const SOFA_ACCESSORY_ROLE_LABEL: Record<SofaAccessoryRole, string> = {
+  back: 'Back cushion',
+  'back-support': 'Back support',
+  arm: 'Extra arm',
+};
+
+/** Width of a clip-on arm when its Model does not say (cm). */
+export const DEFAULT_ARM_WIDTH_CM = 20;
+
+/** What allowed_options.placement holds on an accessory Model. */
+export interface SofaAccessoryPlacement {
+  role: SofaAccessoryRole;
+  armWidthCm?: number;
+}
+
+/** One accessory a sofa Model offers, resolved to its single SKU. */
+export interface SofaAccessoryOption {
+  /** The accessory's product_models.id — what a sofa Model ticks. */
+  modelId: string;
+  /** Its one SKU (mfg_products.id) — what the cart line sells. */
+  productId: string;
+  code: string;
+  name: string;
+  /** sell_price_sen. null / 0 = no selling price yet: the piece cannot be
+   *  added, because Houzs books whatever the tablet sends for an unpriced SKU,
+   *  RM 0 included. */
+  priceSen: number | null;
+  role: SofaAccessoryRole;
+  armWidthCm: number;
+}
+
+/** The fabric a piece is made in — the shape FabricColourPicker hands back,
+ *  trimmed to what the order line needs. */
+export interface AccessoryFabric {
+  fabricId: string;
+  /** null = colour KIV, as on the sofa. */
+  colourId: string | null;
+  fabricLabel: string;
+  colourLabel: string | null;
+  colourHex: string | null;
+}
+
+export interface PlacedAccessory {
+  id: string;
+  /** The accessory Model (SofaAccessoryOption.modelId). */
+  modelId: string;
+  /** The module it hangs on. */
+  cellId: string;
+  /** back / back-support: the seat, 0-based, left to right on the module
+   *  unrotated. arm: the module's side in its own frame — 0 left, 2 right. */
+  slot: number;
+  /** A colour of its own. Absent = the sofa's. */
+  fabric?: AccessoryFabric;
+}
+
+/* ─── Placement on the Model ─────────────────────────────────────────── */
+
+/** Until the owner sets it in Modular, a piece's role is read off its name —
+ *  the four 2990 created on 2026-10-05 say what they are ("ARM REST 01",
+ *  "BACK CUSHION 06", "SAND BACK 01"). Anything else is a back cushion. */
+export function guessAccessoryRole(name: string, code = ''): SofaAccessoryRole {
+  const s = `${name} ${code}`.toUpperCase();
+  if (/\bARM\b|ARMREST|ARM REST/.test(s)) return 'arm';
+  if (/SAND\s*BACK|SUPPORT/.test(s)) return 'back-support';
+  return 'back';
+}
+
+/** allowed_options.placement of an accessory Model, or null when unset / invalid. */
+export function readAccessoryPlacement(allowedOptions: unknown): SofaAccessoryPlacement | null {
+  const p = (allowedOptions as { placement?: unknown } | null | undefined)?.placement as
+    | { role?: unknown; armWidthCm?: unknown }
+    | undefined;
+  if (!p || (p.role !== 'back' && p.role !== 'back-support' && p.role !== 'arm')) return null;
+  const w = Number(p.armWidthCm);
+  return Number.isFinite(w) && w > 0 ? { role: p.role, armWidthCm: Math.round(w) } : { role: p.role };
+}
+
+/** allowed_options.sofa_accessories of a sofa Model — accessory Model ids. */
+export function readSofaAccessoryIds(allowedOptions: unknown): string[] {
+  const ids = (allowedOptions as { sofa_accessories?: unknown } | null | undefined)?.sofa_accessories;
+  return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string' && x.length > 0) : [];
+}
+
+export const isPriced = (o: Pick<SofaAccessoryOption, 'priceSen'>): boolean =>
+  o.priceSen != null && o.priceSen > 0;
+
+/* ─── Geometry ──────────────────────────────────────────────────────── */
+
+/** Depth of the backrest band in the module art (11 of 70 units ≈ 15cm of 95). */
+const BACKREST_CM = 15;
+const CUSHION_CM = 18;
+const SUPPORT_CM = 8;
+/** A seat beside an arm starts after the arm. */
+const ARM_INSET_CM = 16;
+const SEAT_GAP_CM = 3;
+/** How far a dropped piece may land from a slot and still take it (cm). */
+export const ACCESSORY_SNAP_CM = 70;
+
+const LOCAL_W = 0;
+const LOCAL_N = 1;
+const LOCAL_E = 2;
+
+/** The module's edges unrotated: [W, N, E, S]. */
+const localEdges = (cell: Cell) => cellEdges({ ...cell, rot: 0 });
+
+const quarterTurns = (cell: Cell): number => ((((cell.rot % 360) + 360) % 360) / 90);
+
+const toCanvasEdge = (cell: Cell, local: number): EdgeIdx => ((local + quarterTurns(cell)) % 4) as EdgeIdx;
+
+/** Seats of a module that has a backrest; 0 for corners, consoles, stools. */
+export function backSeatCount(cell: Cell): number {
+  const m = findModule(cell.moduleId);
+  if (!m || m.accessory || isAccessoryModule(cell.moduleId)) return 0;
+  if (localEdges(cell)[LOCAL_N] !== 'back') return 0;
+  return Math.max(1, m.cushions);
+}
+
+/** A strip in front of a seat's backrest, `from`..`from + thick` cm deep, in
+ *  canvas coordinates. Works in the module's own frame (backrest at the top,
+ *  seats left to right) and turns the result with the module. */
+function seatStrip(cell: Cell, slot: number, depth: Depth, from: number, thick: number): Bbox | null {
+  const m = findModule(cell.moduleId);
+  const b = cellBbox(cell, depth);
+  const n = backSeatCount(cell);
+  if (!m || !b || slot < 0 || slot >= n) return null;
+  const fp0 = moduleFootprint(m, 0, depth); // unrotated: w along the seats, h deep
+  const edges = localEdges(cell);
+  const seatW = fp0.w / n;
+  const lx0 = seatW * slot + (slot === 0 && edges[LOCAL_W] === 'arm' ? ARM_INSET_CM : SEAT_GAP_CM / 2);
+  const lx1 = seatW * (slot + 1) - (slot === n - 1 && edges[LOCAL_E] === 'arm' ? ARM_INSET_CM : SEAT_GAP_CM / 2);
+  const ly0 = from;
+  const ly1 = Math.min(fp0.h, from + thick);
+  switch (quarterTurns(cell)) {
+    case 1: return { x: b.x + b.w - ly1, y: b.y + lx0, w: ly1 - ly0, h: lx1 - lx0 };
+    case 2: return { x: b.x + b.w - lx1, y: b.y + b.h - ly1, w: lx1 - lx0, h: ly1 - ly0 };
+    case 3: return { x: b.x + ly0, y: b.y + b.h - lx1, w: ly1 - ly0, h: lx1 - lx0 };
+    default: return { x: b.x + lx0, y: b.y + ly0, w: lx1 - lx0, h: ly1 - ly0 };
+  }
+}
+
+/** An armless end: the module's left or right side, 'open', facing out — no
+ *  module touches it — and not a chaise's cap (its art already has the arm). */
+function isOpenEnd(cell: Cell, localSide: number, cells: readonly Cell[], depth: Depth): boolean {
+  if (localSide !== LOCAL_W && localSide !== LOCAL_E) return false;
+  if (!findModule(cell.moduleId) || isAccessoryModule(cell.moduleId)) return false;
+  if (localEdges(cell)[localSide] !== 'open') return false;
+  const e = toCanvasEdge(cell, localSide);
+  if (lCapEdgeOf(cell.moduleId, cell.rot) === e) return false;
+  return !cells.some((o) => o !== cell && o.id !== cell.id && edgeContacts(cell, o, depth).some((c) => c.edgeA === e));
+}
+
+function armRect(cell: Cell, localSide: number, depth: Depth, widthCm: number): Bbox | null {
+  const b = cellBbox(cell, depth);
+  if (!b) return null;
+  switch (toCanvasEdge(cell, localSide)) {
+    case 0: return { x: b.x - widthCm, y: b.y, w: widthCm, h: b.h };
+    case 1: return { x: b.x, y: b.y - widthCm, w: b.w, h: widthCm };
+    case 2: return { x: b.x + b.w, y: b.y, w: widthCm, h: b.h };
+    default: return { x: b.x, y: b.y + b.h, w: b.w, h: widthCm };
+  }
+}
+
+/* ─── Slots ──────────────────────────────────────────────────────────── */
+
+interface Slot { cellId: string; slot: number; rect: Bbox }
+
+const centreOf = (r: Bbox) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
+
+/** Left to right, then top to bottom — the order tap-to-add fills them in. */
+const byPosition = (a: Slot, b: Slot): number => {
+  const ca = centreOf(a.rect);
+  const cb = centreOf(b.rect);
+  return ca.x - cb.x || ca.y - cb.y;
+};
+
+function backSlots(cells: readonly Cell[], depth: Depth): Slot[] {
+  const out: Slot[] = [];
+  for (const c of cells) {
+    if (!c.id) continue;
+    for (let k = 0; k < backSeatCount(c); k++) {
+      const rect = seatStrip(c, k, depth, BACKREST_CM, CUSHION_CM);
+      if (rect) out.push({ cellId: c.id, slot: k, rect });
+    }
+  }
+  return out.sort(byPosition);
+}
+
+function armSlots(cells: readonly Cell[], depth: Depth, widthCm: number): Slot[] {
+  const out: Slot[] = [];
+  for (const c of cells) {
+    if (!c.id) continue;
+    for (const side of [LOCAL_W, LOCAL_E]) {
+      if (!isOpenEnd(c, side, cells, depth)) continue;
+      const rect = armRect(c, side, depth, widthCm);
+      if (rect) out.push({ cellId: c.id, slot: side, rect });
+    }
+  }
+  return out.sort(byPosition);
+}
+
+const slotKey = (cellId: string, slot: number) => `${cellId}|${slot}`;
+
+/** Which accessory Models' roles a placed piece has, by its Model id. */
+type OptionsById = ReadonlyMap<string, Pick<SofaAccessoryOption, 'role' | 'armWidthCm'>>;
+
+function occupied(placed: readonly PlacedAccessory[], options: OptionsById, role: SofaAccessoryRole, exceptId?: string): Set<string> {
+  return new Set(
+    placed
+      .filter((p) => p.id !== exceptId && options.get(p.modelId)?.role === role)
+      .map((p) => slotKey(p.cellId, p.slot)),
+  );
+}
+
+function candidateSlots(
+  option: Pick<SofaAccessoryOption, 'role' | 'armWidthCm'>,
+  cells: readonly Cell[],
+  placed: readonly PlacedAccessory[],
+  options: OptionsById,
+  depth: Depth,
+  exceptId?: string,
+): Slot[] {
+  if (option.role === 'arm') {
+    const taken = occupied(placed, options, 'arm', exceptId);
+    return armSlots(cells, depth, option.armWidthCm).filter((s) => !taken.has(slotKey(s.cellId, s.slot)));
+  }
+  const cushions = occupied(placed, options, 'back', exceptId);
+  if (option.role === 'back') {
+    return backSlots(cells, depth).filter((s) => !cushions.has(slotKey(s.cellId, s.slot)));
+  }
+  const supports = occupied(placed, options, 'back-support', exceptId);
+  return backSlots(cells, depth).filter((s) => {
+    const k = slotKey(s.cellId, s.slot);
+    return cushions.has(k) && !supports.has(k);
+  });
+}
+
+/** Where tapping "+" puts a new piece: the first free slot, left to right.
+ *  null = nowhere — every seat has one / no back cushion to stack on / no
+ *  armless end. */
+export function nextSlotFor(
+  option: Pick<SofaAccessoryOption, 'role' | 'armWidthCm'>,
+  cells: readonly Cell[],
+  placed: readonly PlacedAccessory[],
+  options: OptionsById,
+  depth: Depth,
+): { cellId: string; slot: number } | null {
+  const s = candidateSlots(option, cells, placed, options, depth)[0];
+  return s ? { cellId: s.cellId, slot: s.slot } : null;
+}
+
+/** Where a piece dragged to `point` lands: the nearest free slot within
+ *  ACCESSORY_SNAP_CM, or null (it goes back where it was). */
+export function nearestSlotFor(
+  option: Pick<SofaAccessoryOption, 'role' | 'armWidthCm'>,
+  point: { x: number; y: number },
+  cells: readonly Cell[],
+  placed: readonly PlacedAccessory[],
+  options: OptionsById,
+  depth: Depth,
+  exceptId?: string,
+): { cellId: string; slot: number } | null {
+  let best: Slot | null = null;
+  let bestD = ACCESSORY_SNAP_CM;
+  for (const s of candidateSlots(option, cells, placed, options, depth, exceptId)) {
+    const c = centreOf(s.rect);
+    const d = Math.hypot(c.x - point.x, c.y - point.y);
+    if (d <= bestD) { bestD = d; best = s; }
+  }
+  return best ? { cellId: best.cellId, slot: best.slot } : null;
+}
+
+/** Move a piece to another slot. A back cushion takes the back support stacked
+ *  behind it along, rather than leaving it to be pruned. */
+export function moveAccessory(
+  placed: readonly PlacedAccessory[],
+  id: string,
+  to: { cellId: string; slot: number },
+  options: OptionsById,
+): PlacedAccessory[] {
+  const piece = placed.find((p) => p.id === id);
+  if (!piece) return placed as PlacedAccessory[];
+  const from = slotKey(piece.cellId, piece.slot);
+  const carriesSupport = options.get(piece.modelId)?.role === 'back';
+  return placed.map((p) => {
+    if (p.id === id) return { ...p, cellId: to.cellId, slot: to.slot };
+    if (carriesSupport && options.get(p.modelId)?.role === 'back-support' && slotKey(p.cellId, p.slot) === from) {
+      return { ...p, cellId: to.cellId, slot: to.slot };
+    }
+    return p;
+  });
+}
+
+/** Keep only pieces that still fit: their Model is still offered, their module
+ *  and slot still exist, one of each role a slot, and a back support only where
+ *  its seat still has the back cushion. Returns the SAME array when nothing
+ *  changed, so it can run in an effect without looping. */
+export function pruneAccessories(
+  placed: readonly PlacedAccessory[],
+  cells: readonly Cell[],
+  options: OptionsById,
+  depth: Depth,
+): PlacedAccessory[] {
+  const cellById = new Map(cells.filter((c) => c.id).map((c) => [c.id as string, c]));
+  const kept = new Set<string>();
+  const seen = new Set<string>();
+  const fits = (p: PlacedAccessory, role: SofaAccessoryRole): boolean => {
+    const cell = cellById.get(p.cellId);
+    if (!cell) return false;
+    if (role === 'arm') return isOpenEnd(cell, p.slot, cells, depth);
+    return p.slot >= 0 && p.slot < backSeatCount(cell);
+  };
+  for (const role of ['back', 'arm', 'back-support'] as const) {
+    for (const p of placed) {
+      if (options.get(p.modelId)?.role !== role || !fits(p, role)) continue;
+      const k = `${role}|${slotKey(p.cellId, p.slot)}`;
+      if (seen.has(k)) continue;
+      if (role === 'back-support' && !seen.has(`back|${slotKey(p.cellId, p.slot)}`)) continue;
+      seen.add(k);
+      kept.add(p.id);
+    }
+  }
+  return kept.size === placed.length ? (placed as PlacedAccessory[]) : placed.filter((p) => kept.has(p.id));
+}
+
+/** Where each piece is drawn, in canvas cm. A back cushion moves forward when
+ *  its seat also has a back support behind it. */
+export function accessoryRects(
+  placed: readonly PlacedAccessory[],
+  cells: readonly Cell[],
+  options: OptionsById,
+  depth: Depth,
+): Array<{ id: string; cellId: string; role: SofaAccessoryRole; rect: Bbox }> {
+  const cellById = new Map(cells.filter((c) => c.id).map((c) => [c.id as string, c]));
+  const supported = occupied(placed, options, 'back-support');
+  const out: Array<{ id: string; cellId: string; role: SofaAccessoryRole; rect: Bbox }> = [];
+  for (const p of placed) {
+    const o = options.get(p.modelId);
+    const cell = cellById.get(p.cellId);
+    if (!o || !cell) continue;
+    let rect: Bbox | null;
+    if (o.role === 'arm') rect = armRect(cell, p.slot, depth, o.armWidthCm);
+    else if (o.role === 'back-support') rect = seatStrip(cell, p.slot, depth, BACKREST_CM, SUPPORT_CM);
+    else {
+      const from = supported.has(slotKey(p.cellId, p.slot)) ? BACKREST_CM + SUPPORT_CM : BACKREST_CM;
+      rect = seatStrip(cell, p.slot, depth, from, CUSHION_CM);
+    }
+    if (rect) out.push({ id: p.id, cellId: p.cellId, role: o.role, rect });
+  }
+  return out;
+}
+
+/** A sofa's outline with its clip-on arms: the modules' box widened by any
+ *  arm on them, so the outline and the length callout include the arms. */
+export function boundsWithArms(
+  box: Bbox,
+  cellIds: ReadonlySet<string>,
+  rects: ReadonlyArray<{ cellId: string; role: SofaAccessoryRole; rect: Bbox }>,
+): Bbox {
+  let x0 = box.x, y0 = box.y, x1 = box.x + box.w, y1 = box.y + box.h;
+  for (const r of rects) {
+    if (r.role !== 'arm' || !cellIds.has(r.cellId)) continue;
+    x0 = Math.min(x0, r.rect.x);
+    y0 = Math.min(y0, r.rect.y);
+    x1 = Math.max(x1, r.rect.x + r.rect.w);
+    y1 = Math.max(y1, r.rect.y + r.rect.h);
+  }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/** The canvas rewrote some modules (the canonical combo layout swaps cells for
+ *  new ones): move each piece from a module that went to the nearest free slot
+ *  on the new layout, or drop it when nothing is close. Same array back when
+ *  every piece's module survived. */
+export function remapAccessories(
+  placed: readonly PlacedAccessory[],
+  oldCells: readonly Cell[],
+  newCells: readonly Cell[],
+  options: OptionsById,
+  depth: Depth,
+): PlacedAccessory[] {
+  const alive = new Set(newCells.map((c) => c.id).filter((id): id is string => !!id));
+  if (placed.every((p) => alive.has(p.cellId))) return placed as PlacedAccessory[];
+  const before = new Map(accessoryRects(placed, oldCells, options, depth).map((r) => [r.id, r.rect]));
+  // Cushions before supports, so a support finds the cushion it stacks on.
+  const order: SofaAccessoryRole[] = ['back', 'arm', 'back-support'];
+  const sorted = [...placed].sort((a, b) =>
+    order.indexOf(options.get(a.modelId)?.role ?? 'back') - order.indexOf(options.get(b.modelId)?.role ?? 'back'));
+  const out: PlacedAccessory[] = [];
+  for (const p of sorted) {
+    if (alive.has(p.cellId)) { out.push(p); continue; }
+    const o = options.get(p.modelId);
+    const rect = before.get(p.id);
+    if (!o || !rect) continue;
+    const to = nearestSlotFor(o, centreOf(rect), newCells, out, options, depth);
+    if (to) out.push({ ...p, ...to });
+  }
+  return out;
+}
+
+/** The clip-on arms, in the frame analyzeSofa reads. */
+export function extraArmsOf(
+  placed: readonly PlacedAccessory[],
+  cells: readonly Cell[],
+  options: OptionsById,
+): ExtraArm[] {
+  const cellById = new Map(cells.filter((c) => c.id).map((c) => [c.id as string, c]));
+  const out: ExtraArm[] = [];
+  for (const p of placed) {
+    const cell = cellById.get(p.cellId);
+    const o = options.get(p.modelId);
+    if (!cell || o?.role !== 'arm') continue;
+    out.push({ cellId: p.cellId, edge: toCanvasEdge(cell, p.slot), widthCm: o.armWidthCm });
+  }
+  return out;
+}
+
+/* ─── Order lines ───────────────────────────────────────────────────── */
+
+/** One Sales Order line's worth of a sofa's pieces: same accessory, same fabric. */
+export interface AccessoryLine {
+  modelId: string;
+  productId: string;
+  code: string;
+  name: string;
+  /** Exact sell_price_sen — never rounded to the ringgit: Houzs re-prices the
+   *  line from the same field and refuses a 0.5% drift (RM 39.50 → 40 is 1.3%). */
+  unitPriceSen: number;
+  /** Pieces on ONE sofa; the cart multiplies by the sofa line's qty. */
+  qtyPerSofa: number;
+  fabric: AccessoryFabric | null;
+}
+
+const fabricKey = (f: AccessoryFabric | null): string => (f ? `${f.fabricId}|${f.colourId ?? ''}` : '');
+
+/** Group one sofa's pieces into order lines (accessory × fabric). A piece with
+ *  no colour of its own takes the sofa's. Unpriced pieces are left out — the
+ *  canvas refuses Add while one is on it (unpricedAccessories). */
+export function accessoryLines(
+  placed: readonly PlacedAccessory[],
+  options: ReadonlyMap<string, SofaAccessoryOption>,
+  sofaFabric: AccessoryFabric | null,
+): AccessoryLine[] {
+  const lines = new Map<string, AccessoryLine>();
+  for (const p of placed) {
+    const o = options.get(p.modelId);
+    if (!o || !isPriced(o)) continue;
+    const fabric = p.fabric ?? sofaFabric ?? null;
+    const k = `${o.modelId}#${fabricKey(fabric)}`;
+    const cur = lines.get(k);
+    if (cur) cur.qtyPerSofa += 1;
+    else lines.set(k, { modelId: o.modelId, productId: o.productId, code: o.code, name: o.name, unitPriceSen: o.priceSen as number, qtyPerSofa: 1, fabric });
+  }
+  return [...lines.values()];
+}
+
+/** Pieces whose accessory has no selling price — Add must wait for one. */
+export function unpricedAccessories(
+  placed: readonly PlacedAccessory[],
+  options: ReadonlyMap<string, SofaAccessoryOption>,
+): SofaAccessoryOption[] {
+  const out = new Map<string, SofaAccessoryOption>();
+  for (const p of placed) {
+    const o = options.get(p.modelId);
+    if (o && !isPriced(o)) out.set(o.modelId, o);
+  }
+  return [...out.values()];
+}
+
+/** Sum of a set of pieces, in sen. */
+export function accessoriesTotalSen(
+  placed: readonly PlacedAccessory[],
+  options: ReadonlyMap<string, SofaAccessoryOption>,
+): number {
+  return placed.reduce((s, p) => {
+    const o = options.get(p.modelId);
+    return s + (o && isPriced(o) ? (o.priceSen as number) : 0);
+  }, 0);
+}

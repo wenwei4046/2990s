@@ -29,6 +29,46 @@ const product = (over: Partial<CatalogProduct> = {}): CatalogProduct => ({
   ...over,
 });
 
+describe('cartLineToSoItem — Sofa Accessory', () => {
+  const accessory = (over: Partial<CartConfig> = {}): CartLine => ({
+    key: 'cfg-sofa~m-bc06~CG~CG-002',
+    qty: 2,
+    config: {
+      kind: 'flat',
+      productId: 'mfg-bc06',
+      productName: 'BACK CUSHION 06',
+      category: 'FABRIC_ACCESSORY',
+      modelId: 'm-bc06',
+      accessoryOfKey: 'cfg-sofa',
+      accessoryPerSofa: 2,
+      fabricId: 'CG',
+      fabricLabel: 'CG',
+      colourId: 'CG-002',
+      colourLabel: 'Sand',
+      colourHex: '#c5b9a8',
+      total: 135.35,
+      summary: 'Sofa accessory · CG / Sand',
+      ...over,
+    } as CartConfig,
+  });
+
+  it('books Houzs\'s own group, the exact sen price and only the fabric keys', () => {
+    const item = cartLineToSoItem(accessory(), new Map(), 'BC06');
+    expect(item.itemCode).toBe('BC06');
+    expect(item.itemGroup).toBe('fabric_accessory');
+    expect(item.qty).toBe(2);
+    expect(item.unitPriceCenti).toBe(13535);
+    expect(item.variants).toEqual({
+      fabricId: 'CG', fabricLabel: 'CG', colourId: 'CG-002', fabricCode: 'CG-002', colourLabel: 'Sand', colourHex: '#c5b9a8',
+    });
+  });
+
+  it('keeps the colour open (KIV) when the sofa has only a series', () => {
+    const item = cartLineToSoItem(accessory({ colourId: undefined, colourLabel: undefined, colourHex: undefined } as Partial<CartConfig>), new Map(), 'BC06');
+    expect(item.variants).toEqual({ fabricId: 'CG', fabricLabel: 'CG' });
+  });
+});
+
 describe('cartLineToSoItem', () => {
   it('maps a sofa Quick-Pick (bundleId) line', () => {
     const line: CartLine = {

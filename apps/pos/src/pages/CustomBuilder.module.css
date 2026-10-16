@@ -804,3 +804,97 @@
 @media (prefers-reduced-motion: reduce) {
   .palette, .dialogPanel, .canvasCol > :not(.priceBar):not(.dialogBackdrop) { animation: none; }
 }
+
+/* ── Sofa Accessories (owner 2026-10-16, lib/sofa-accessories.ts) ──
+   Loose pieces on the modules: a back cushion against a seat's backrest, a
+   back support behind it, an extra arm at an armless end. Same ink as the
+   module art; softer cushion tones so they read as add-ons. */
+.paletteItem:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.paletteItem:disabled:hover {
+  background: var(--c-paper);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.accessory {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.4px solid #2C2C2A;
+  border-radius: 6px;
+  z-index: 3;
+  cursor: grab;
+  touch-action: none;
+}
+.accessory:active { cursor: grabbing; }
+.accessoryBack { background: #E9DAC1; }
+.accessorySupport { background: #DCC7A6; border-radius: 4px; }
+.accessoryArm { background: #CDB38D; border-radius: 8px; }
+.accessorySelected {
+  outline: 2px solid var(--c-burnt);
+  outline-offset: 2px;
+  z-index: 4;
+}
+.accessorySeam {
+  position: absolute;
+  inset: 3px;
+  border: 1px dashed rgba(44, 44, 42, 0.45);
+  border-radius: inherit;
+  pointer-events: none;
+}
+/* The piece's own colour, when it is not the sofa's. */
+.accessoryDot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid #2C2C2A;
+  pointer-events: none;
+}
+.accessoryTools {
+  /* Below the piece — above it sits the sofa's length callout. */
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(34, 31, 32, 0.1);
+  white-space: nowrap;
+  z-index: 5;
+}
+.accessoryToolBtn {
+  appearance: none;
+  border: none;
+  background: var(--bg-alt);
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 0;
+}
+.accessoryToolBtn:hover { background: var(--c-ink); color: #fff; }
+.accessoryNotePill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  background: var(--bg-alt);
+  color: var(--fg);
+}

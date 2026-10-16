@@ -1612,12 +1612,29 @@ export const hasArmConflict = (cell: Cell, allCells: Cell[], depth: Depth): bool
   return false;
 };
 
+/** An extra arm (a Sofa Accessory such as AR01) clipped onto a cell's outward
+ *  'open' end. `edge` is in the CANVAS frame, like cellEdges(). `widthCm`
+ *  widens the sofa for the long-axis test — a lone 1NA (75 wide, 95 deep)
+ *  with an arm each side is a 115cm sofa, not a 95cm-deep one. */
+export interface ExtraArm { cellId: string; edge: EdgeIdx; widthCm?: number }
+
 /**
  * Validate one sofa group: collect arm-arm / arm-blocked-by-module
  * violations, decide closure (must have an arm at each end of the dominant
  * axis, treating an L-module's outer edge as a self-closing cap).
+ *
+ * `opts.extraArms` (POS only, 2026-10-16): an armless end that carries a
+ * clip-on arm accessory counts as an arm, so 1NA + 1NA with an extra arm at
+ * each end is a closed sofa. Only an outward 'open' edge can take one.
  */
-export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
+export const analyzeSofa = (
+  group: Cell[],
+  depth: Depth,
+  opts?: { extraArms?: ReadonlyArray<ExtraArm> },
+): SofaAnalysis => {
+  const extraArm = new Set((opts?.extraArms ?? []).map((a) => `${a.cellId}|${a.edge}`));
+  const extraArmWidth = new Map<string, number>();
+  for (const a of opts?.extraArms ?? []) extraArmWidth.set(`${a.cellId}|${a.edge}`, a.widthCm ?? 0);
   const violations: ArmViolation[] = [];
   const ids = group.map(cellKey);
   const contactsByCell: Record<string, { otherId: string; myEdge: EdgeIdx; myType: EdgeType; otherType: EdgeType }[]> = {};
@@ -1678,6 +1695,8 @@ export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
       const t = edges[e];
       if (t === 'arm') {
         outwardArms.push({ edge: e });
+      } else if (t === 'open' && !isAcc && c.id != null && extraArm.has(`${c.id}|${e}`)) {
+        outwardArms.push({ edge: e });
       } else if (t === 'open' && !isAcc) {
         // Outward 'open' edge with no arm/L-cap covering it. 'back' and
         // 'front' faces are by-design exposed (wall-side and seating-side
@@ -1694,10 +1713,13 @@ export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
     for (const c of group) {
       const b = cellBbox(c, depth);
       if (!b) continue;
-      if (b.x < minX) minX = b.x;
-      if (b.y < minY) minY = b.y;
-      if (b.x + b.w > maxX) maxX = b.x + b.w;
-      if (b.y + b.h > maxY) maxY = b.y + b.h;
+      // A clip-on arm sticks out past the module on its edge.
+      const arm = (e: EdgeIdx): number =>
+        (c.id != null && extraArm.has(`${c.id}|${e}`) ? extraArmWidth.get(`${c.id}|${e}`) ?? 0 : 0);
+      if (b.x - arm(EDGE_W) < minX) minX = b.x - arm(EDGE_W);
+      if (b.y - arm(EDGE_N) < minY) minY = b.y - arm(EDGE_N);
+      if (b.x + b.w + arm(EDGE_E) > maxX) maxX = b.x + b.w + arm(EDGE_E);
+      if (b.y + b.h + arm(EDGE_S) > maxY) maxY = b.y + b.h + arm(EDGE_S);
     }
     if (Number.isFinite(minX)) {
       bbW = maxX - minX;

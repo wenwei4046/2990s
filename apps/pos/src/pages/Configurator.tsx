@@ -2535,6 +2535,7 @@ export const Configurator = () => {
             setCells={setSofaCells}
             editingKey={isEditing && editKey ? editKey : undefined}
             initialFabric={fabricSel}
+            initialAccessories={isEditing && editingLine?.config.kind === 'sofa' ? editingLine.config.accessories : undefined}
             modelCustomizer={modelCustomizerForDepth}
             baseModel={p.base_model ?? undefined}
             modelId={(p as { model_id?: string | null }).model_id ?? null}

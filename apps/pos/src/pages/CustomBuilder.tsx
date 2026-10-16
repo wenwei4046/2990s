@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type Dispatch, type PointerEvent, type ReactNode, type SetStateAction } from 'react';
-import { Trash2, RotateCw, Eraser, Maximize2, Minimize2, Plus, X, SlidersHorizontal } from 'lucide-react';
+import { Trash2, RotateCw, Eraser, Maximize2, Minimize2, Plus, X, SlidersHorizontal, Palette } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, fabricTierAddon, maintActiveValues, resolveFabricTierOverride, type FabricTier } from '@2990s/shared';
 import {
@@ -43,6 +43,25 @@ import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import { renderCornerSofa, cornerCompositeFromCells, type CornerGeo } from '../lib/sofa-corner';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import { SofaAccessoryArt } from '../components/SofaAccessoryArt';
+import {
+  SOFA_ACCESSORY_ROLE_LABEL,
+  accessoriesTotalSen,
+  accessoryLines,
+  accessoryRects,
+  boundsWithArms,
+  extraArmsOf,
+  isPriced,
+  moveAccessory,
+  nearestSlotFor,
+  nextSlotFor,
+  pruneAccessories,
+  remapAccessories,
+  unpricedAccessories,
+  type AccessoryFabric,
+  type PlacedAccessory,
+  type SofaAccessoryOption,
+} from '../lib/sofa-accessories';
 import styles from './CustomBuilder.module.css';
 
 const ROOM_W_CM = 600;   // 6 m wide
@@ -319,7 +338,15 @@ interface CustomBuilderProps {
    *  matches, but procurement needs exactly the compartments laid out. The
    *  parent owns `cells`, as it always does, and saves them itself. */
   layoutOnly?: { railBlock?: ReactNode };
+  /** Sofa Accessory pieces of the cart line being edited (its config.accessories),
+   *  put back on the canvas once its modules are. lib/sofa-accessories.ts. */
+  initialAccessories?: PlacedAccessory[];
 }
+
+/** An accessory's price for the palette: whole ringgit like the modules, with
+ *  sen only when the price has them. */
+const fmtAccessoryPrice = (sen: number): string =>
+  sen % 100 === 0 ? fmtRM(sen / 100) : `RM ${(sen / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
 // persistence layer (where cells may be hydrated with ids generated in an
@@ -342,7 +369,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly, initialAccessories }: CustomBuilderProps) => {
   const isPhone = useMediaQuery('(max-width: 767px)');
   const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
   const paletteRef = useRef<HTMLDialogElement>(null);
@@ -451,6 +478,48 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   }, [roomW, roomH]);
 
   const addConfigured = useCart((s) => s.addConfigured);
+  const setSofaAccessories = useCart((s) => s.setSofaAccessories);
+
+  /* ─── Sofa Accessories (owner 2026-10-16, lib/sofa-accessories.ts) ──
+     Pieces that attach to the modules — back cushion, back support, extra arm
+     — offered by this Model (Modular › Sofa accessories). Selling only: not in
+     Marketing's layout, and not in a TBC exchange or an add to a placed order,
+     which hand ONE sofa line to a callback with nowhere for accessory lines. */
+  const accessoriesOn = !layoutOnly && !onSwapConfirm && !onAddToOrderConfirm;
+  const accessoryOptions = useMemo<SofaAccessoryOption[]>(
+    () => (accessoriesOn ? modelCustomizer?.accessories ?? [] : []),
+    [accessoriesOn, modelCustomizer],
+  );
+  const accessoryById = useMemo(
+    () => new Map(accessoryOptions.map((o) => [o.modelId, o] as const)),
+    [accessoryOptions],
+  );
+  const [accessories, setAccessories] = useState<PlacedAccessory[]>([]);
+  const [selectedAccessoryId, setSelectedAccessoryId] = useState<string | null>(null);
+  const [accessoryColourFor, setAccessoryColourFor] = useState<string | null>(null);
+  const [accessoryNote, setAccessoryNote] = useState<string | null>(null);
+  const noteTimerRef = useRef<number | undefined>(undefined);
+  const flashAccessoryNote = (msg: string) => {
+    setAccessoryNote(msg);
+    window.clearTimeout(noteTimerRef.current);
+    noteTimerRef.current = window.setTimeout(() => setAccessoryNote(null), 4000);
+  };
+  useEffect(() => () => window.clearTimeout(noteTimerRef.current), []);
+  // Editing a cart line: its pieces go back once its modules are on the canvas
+  // (the parent hydrates cells in an effect; earlier, every piece would prune).
+  const accessoriesHydratedRef = useRef(false);
+  useEffect(() => {
+    if (accessoriesHydratedRef.current || !initialAccessories?.length || cells.length === 0) return;
+    accessoriesHydratedRef.current = true;
+    setAccessories(initialAccessories.map((p) => ({ ...p })));
+  }, [initialAccessories, cells.length]);
+  // Keep pieces in step with the modules — a module removed, turned against
+  // another, or an accessory switched off for this Model. Waits for the Model's
+  // data, and for a drag to end (draft positions are transient).
+  useEffect(() => {
+    if (draftDelta || !modelCustomizer) return;
+    setAccessories((prev) => pruneAccessories(prev, cells, accessoryById, depth));
+  }, [cells, accessoryById, depth, draftDelta, modelCustomizer]);
 
 
   /* ─── Module-add (palette → canvas) ─────────────────────────────── */
@@ -570,7 +639,64 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     }));
   };
 
-  const clearAll = () => { setCells([]); setSelectedId(null); setSelectedGroupIds(null); };
+  const clearAll = () => {
+    setCells([]); setSelectedId(null); setSelectedGroupIds(null);
+    setAccessories([]); setSelectedAccessoryId(null);
+  };
+
+  /* ─── Sofa Accessory actions ─────────────────────────────────────── */
+
+  // Tap "+": the first free slot, left to right.
+  const addAccessory = (o: SofaAccessoryOption) => {
+    const to = nextSlotFor(o, cells, accessories, accessoryById, depth);
+    if (!to) {
+      flashAccessoryNote(
+        o.role === 'arm' ? 'There is no armless end for an extra arm.'
+          : o.role === 'back-support' ? 'Add a back cushion first — a back support goes behind one.'
+            : cells.length === 0 ? 'Add a seat first.'
+              : 'Every seat already has a back cushion.',
+      );
+      return;
+    }
+    const id = nextCellId();
+    setAccessories((prev) => [...prev, { id, modelId: o.modelId, ...to }]);
+    setSelectedAccessoryId(id);
+    setSelectedId(null);
+    setSelectedGroupIds(null);
+  };
+
+  const removeAccessory = (id: string) => {
+    // A back support behind a removed cushion goes with it (pruneAccessories).
+    setAccessories((prev) => prev.filter((p) => p.id !== id));
+    setSelectedAccessoryId(null);
+  };
+
+  const setAccessoryFabric = (id: string, fabric: AccessoryFabric | undefined) => {
+    setAccessories((prev) => prev.map((p) => {
+      if (p.id !== id) return p;
+      const { fabric: _old, ...rest } = p;
+      return fabric ? { ...rest, fabric } : rest;
+    }));
+  };
+
+  // Drag a piece to another seat / end: it lands on the nearest free slot.
+  const accDragRef = useRef<{ id: string; pid: number; sx: number; sy: number; moved: boolean } | null>(null);
+  const [accDrag, setAccDrag] = useState<{ id: string; dx: number; dy: number } | null>(null);
+  const onAccessoryPointerDown = (id: string, e: PointerEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest(`.${styles.accessoryTools}`)) return; // let buttons work
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    accDragRef.current = { id, pid: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false };
+  };
+  const onAccessoryPointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    const s = accDragRef.current;
+    if (!s) return;
+    const vs = visualScaleRef.current || 1;
+    const dx = (e.clientX - s.sx) / SCALE / vs;
+    const dy = (e.clientY - s.sy) / SCALE / vs;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) s.moved = true;
+    if (s.moved) setAccDrag({ id: s.id, dx, dy });
+  };
 
   /* ─── Drag handling ────────────────────────────────────────────── */
 
@@ -601,6 +727,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     const cell = cells.find((c) => c.id === id);
     if (!cell) return;
     e.currentTarget.setPointerCapture(e.pointerId);
+    setSelectedAccessoryId(null);
 
     // If the tapped cell is part of an active whole-group selection, drag the
     // whole group. Otherwise drag the cell solo and clear any group selection.
@@ -710,12 +837,44 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     );
   }, [cells, draftDelta]);
 
+  // Where each Sofa Accessory piece is drawn — off the LIVE module positions,
+  // so a piece rides along while its sofa is dragged.
+  const accRects = useMemo(
+    () => accessoryRects(accessories, displayCells, accessoryById, depth),
+    [accessories, displayCells, accessoryById, depth],
+  );
+  const onAccessoryPointerUp = (e: PointerEvent<HTMLDivElement>) => {
+    const s = accDragRef.current;
+    if (!s) return;
+    accDragRef.current = null;
+    try { e.currentTarget.releasePointerCapture(s.pid); } catch { /* swallow */ }
+    const d = accDrag;
+    setAccDrag(null);
+    if (!s.moved || !d) {
+      // A tap selects (or deselects) the piece.
+      setSelectedAccessoryId((cur) => (cur === s.id ? null : s.id));
+      setSelectedId(null);
+      setSelectedGroupIds(null);
+      return;
+    }
+    const piece = accessories.find((p) => p.id === s.id);
+    const o = piece ? accessoryById.get(piece.modelId) : undefined;
+    const r = accRects.find((x) => x.id === s.id);
+    if (!piece || !o || !r) return;
+    const point = { x: r.rect.x + r.rect.w / 2 + d.dx, y: r.rect.y + r.rect.h / 2 + d.dy };
+    const to = nearestSlotFor(o, point, cells, accessories, accessoryById, depth, piece.id);
+    if (to) setAccessories((prev) => moveAccessory(prev, piece.id, to, accessoryById));
+    else flashAccessoryNote(o.role === 'arm' ? 'Drop an extra arm at an armless end.' : 'Drop it on a seat to attach it.');
+  };
+
   /* ─── Group + price + violations ───────────────────────────────── */
 
   const groups = useMemo(() => groupSofas(cells, depth), [cells, depth]);
+  // An extra arm (Sofa Accessory) on an armless end closes that end.
+  const extraArms = useMemo(() => extraArmsOf(accessories, cells, accessoryById), [accessories, cells, accessoryById]);
   const analyses = useMemo(
     () => groups.map((g) => {
-      const a = { group: g, ...analyzeSofa(g, depth) };
+      const a = { group: g, ...analyzeSofa(g, depth, { extraArms }) };
       // An attached headrest (renders as a band on a sofa back) counts as
       // closed — it no longer needs its own "needs a sofa" prompt.
       if (!a.closed && g.length === 1 && g[0]!.moduleId === 'HEADREST'
@@ -724,7 +883,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       }
       return a;
     }),
-    [groups, depth, cells],
+    [groups, depth, cells, extraArms],
   );
   // PWP Code Voucher (Phase 2) — the redeem control + voucher state now live in
   // the parent Configurator's shared top bar (2026-06-02). `pricing` arrives
@@ -858,16 +1017,22 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     });
 
     if (ops.length === 0) return;
-    setCells((prev) => {
-      let next = prev;
+    const apply = (base: Cell[]): Cell[] => {
+      let next = base;
       for (const op of ops) {
         next = next.filter((c) => c.id == null || !op.removeIds.has(c.id));
         next = next.concat(op.addCells);
       }
       return next;
-    });
+    };
+    setCells((prev) => apply(prev));
+    // The rewrite mints new modules; carry each Sofa Accessory piece across to
+    // the same spot on them (lib/sofa-accessories.ts remapAccessories).
+    const nextCells = apply(cells);
+    setAccessories((prev) => remapAccessories(prev, cells, nextCells, accessoryById, depth));
     setSelectedId(null);
     setSelectedGroupIds(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- cells/accessoryById are read for the remap only; this effect is driven by priceResult/analyses, as before
   }, [priceResult, analyses, draftDelta, editingGroupIds, depth, layoutOnly]);
   const violationCellIds = useMemo(() => {
     const set = new Set<string>();
@@ -953,7 +1118,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // Leg height is OPTIONAL at Add-to-Cart too (Loo 2026-06-11) — the SO-side
   // so-variant-rule legHeight axis still blocks a Processing date / Proceed.
   // TBC sofa exchange + add-to-order: single sofa only (one line per call).
-  const canAdd = cells.length > 0 && allClosed
+  // A piece whose accessory lost its selling price can't be sold — Houzs would
+  // book whatever the tablet sent for it, RM 0 included.
+  const unpricedPieces = useMemo(() => unpricedAccessories(accessories, accessoryById), [accessories, accessoryById]);
+  // Pieces on the canvas, in ringgit — added to the Total, sold as their own lines.
+  const accessoriesRm = accessoriesTotalSen(accessories, accessoryById) / 100;
+  const canAdd = cells.length > 0 && allClosed && unpricedPieces.length === 0
     && (!onSwapConfirm || effectiveBuildCount === 1)
     && (!onAddToOrderConfirm || effectiveBuildCount === 1);
 
@@ -980,6 +1150,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     // When editing, the first emitted line replaces the original; extra groups
     // (staff added a second sofa during the edit) append as new lines.
     let usedEditKey = false;
+    // The sofa's fabric, for its Sofa Accessory pieces that have none of their own.
+    const sofaFabric: AccessoryFabric | null = fabricSel
+      ? { fabricId: fabricSel.fabricId, colourId: fabricSel.colourId, fabricLabel: fabricSel.fabricLabel, colourLabel: fabricSel.colourLabel, colourHex: fabricSel.colourHex }
+      : null;
     for (let i = 0; i < priceResult.groups.length; i++) {
       if (headrestFold.skip.has(i)) continue; // folded into its sofa's line below
       const g = priceResult.groups[i]!;
@@ -1009,6 +1183,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // passes PWP-effective `pricing`). `pwpCode`/`pwpComboIds` are props.
       const pwpCombo = pwpCode ? (pricing.combos ?? []).find((c) => pwpComboIds.includes(c.id)) : undefined;
       const isPwpGroup = !!pwpCombo && matchComboSubset(groupCells.map((c) => c.moduleId), pwpCombo.modules) != null;
+      // This sofa's Sofa Accessory pieces: kept on the line for Edit, sold as
+      // their own lines below — never in `total`.
+      const groupCellIds = new Set(groupCells.map((c) => c.id).filter((id): id is string => id != null));
+      const groupPieces = accessories.filter((p) => groupCellIds.has(p.cellId));
       const snapshot: SofaConfigSnapshot = {
         kind: 'sofa',
         productId,
@@ -1036,6 +1214,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         ...(!usedEditKey && remark.trim() ? { remark: remark.trim() } : {}),
         ...(!usedEditKey && extraAddonNote.trim() ? { extraAddonNote: extraAddonNote.trim() } : {}),
         ...(!usedEditKey && extraAmountRm > 0 ? { extraAddonAmountRM: extraAmountRm } : {}),
+        ...(groupPieces.length > 0 ? { accessories: groupPieces.map((p) => ({ ...p })) } : {}),
         total: foldedPrice + sofaFabricDelta + legSurchargeRm + (!usedEditKey ? extraAmountRm : 0),
         summary,
       };
@@ -1045,7 +1224,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       /* Add-to-placed-SO — hand the single build to the Configurator's
          confirmAddToOrder. canAdd already pinned groups to 1. */
       if (onAddToOrderConfirm) { onAddToOrderConfirm(snapshot); return; }
-      addConfigured(snapshot, !usedEditKey && editingKey ? { editingKey } : undefined);
+      const lineKey = addConfigured(snapshot, !usedEditKey && editingKey ? { editingKey } : undefined);
+      // Always set, even to none — an edit that took every piece off must drop
+      // the line's old accessory lines.
+      if (lineKey) setSofaAccessories(lineKey, accessoryLines(groupPieces, accessoryById, sofaFabric));
       usedEditKey = true;
     }
     onAdded();
@@ -1269,6 +1451,39 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
               );
             });
           })()}
+          {/* Sofa Accessories this Model offers (Modular › Sofa accessories).
+              Tap to attach to the next free seat / armless end; drag a piece
+              on the canvas to move it. One without a selling price can't be
+              added — Houzs would book whatever the tablet sent for it. */}
+          {accessoryOptions.length > 0 && (
+            <div className={styles.paletteGroup}>
+              <div className={styles.paletteGroupHead}>Sofa accessories</div>
+              {accessoryOptions.map((o) => {
+                const priced = isPriced(o);
+                return (
+                  <button
+                    key={o.modelId}
+                    type="button"
+                    className={styles.paletteItem}
+                    disabled={!priced}
+                    onClick={() => {
+                      addAccessory(o);
+                      if (isPhone) setMobilePaletteOpen(false);
+                    }}
+                    title={priced ? `${o.name} · ${SOFA_ACCESSORY_ROLE_LABEL[o.role]}` : 'No selling price yet — set it in Products › SKU Master'}
+                  >
+                    <div className={styles.paletteArt}><SofaAccessoryArt role={o.role} /></div>
+                    <div className={styles.paletteInfo}>
+                      <div className={styles.paletteCode}>{o.code}</div>
+                      <div className={styles.paletteSub}>{SOFA_ACCESSORY_ROLE_LABEL[o.role]}</div>
+                      <div className={styles.palettePrice}>{priced ? fmtAccessoryPrice(o.priceSen as number) : 'Price not set'}</div>
+                    </div>
+                    <span className={styles.paletteAdd} aria-hidden>+</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
         {layoutOnly ? layoutOnly.railBlock : (
           <FabricColourPicker
@@ -1303,7 +1518,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         {!layoutOnly && (
           <div className={styles.mobilePreviewPrice}>
             {allClosed && cells.length > 0 ? 'Total ' : 'Provisional '}
-            {fmtRM(priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm)}
+            {fmtRM(priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm + accessoriesRm)}
           </div>
         )}
         <header className={styles.canvasHead}>
@@ -1341,6 +1556,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 {analyses.find((a) => !a.closed)?.reason ?? 'Not closed'}
               </span>
             )}
+            {unpricedPieces.length > 0 && (
+              <span className={styles.notMatchPill}>
+                No selling price: {unpricedPieces.map((o) => o.code).join(', ')}
+              </span>
+            )}
+            {accessoryNote && (
+              <span className={styles.accessoryNotePill} role="status">{accessoryNote}</span>
+            )}
             {cells.length > 0 && (
               <button type="button" className={styles.clearBtn} onClick={clearAll}>
                 <Eraser size={14} strokeWidth={1.75} /> Clear all
@@ -1364,6 +1587,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
               setSelectedId(null);
               setSelectedGroupIds(null);
               setEditingGroupIds(null);
+              setSelectedAccessoryId(null);
             }
           }}
         >
@@ -1392,8 +1616,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             // Use displayCells (with draft drag delta applied) so the outline
             // tracks the moving sofa instead of orphaning at the start position.
             const displayedGroupCells = displayCells.filter((c) => c.id != null && groupSet.has(c.id));
-            const bb = cellsBbox(displayedGroupCells, depth);
-            if (!bb) return null;
+            const cellsBb = cellsBbox(displayedGroupCells, depth);
+            if (!cellsBb) return null;
+            // Extra arms (Sofa Accessory) are part of the sofa's outline.
+            const bb = boundsWithArms(cellsBb, groupSet, accRects);
             const isActive = selectedGroupIds != null
               && selectedGroupIds.length === groupIds.length
               && groupIds.every((id) => selectedGroupIds.includes(id));
@@ -1476,15 +1702,18 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             // user has just stepped out of.
             if (editingGroupIds && Array.from(ids).every((id) => editingGroupIds.has(id))) return null;
             const displayedGroup = displayCells.filter((c) => c.id != null && ids.has(c.id));
-            const bb = cellsBbox(displayedGroup, depth);
-            if (!bb) return null;
+            const cellsBb = cellsBbox(displayedGroup, depth);
+            if (!cellsBb) return null;
+            // The length includes any extra arm (Sofa Accessory) — the sofa is wider.
+            const bb = boundsWithArms(cellsBb, ids, accRects);
             // If a headrest band sits above this sofa group, lift the length
             // callout above the band so the "…cm" label doesn't overlap it.
-            // (Band thickness = headrest depth, 30cm.)
+            // (Band thickness = headrest depth, 30cm.) Matched on the modules'
+            // own box — the headrest knows nothing of extra arms.
             const bandAbove = displayCells.some((c) => {
               if (c.moduleId !== 'HEADREST') return false;
               const back = headrestBackTarget(c, displayCells, depth);
-              return !!back && Math.abs(back.x - bb.x) < 1 && Math.abs(back.y - bb.y) < 1 && Math.abs(back.w - bb.w) < 1;
+              return !!back && Math.abs(back.x - cellsBb.x) < 1 && Math.abs(back.y - cellsBb.y) < 1 && Math.abs(back.w - cellsBb.w) < 1;
             });
             const topCalloutY = bb.y * SCALE - 30 - (bandAbove ? 30 * SCALE : 0);
             return (
@@ -1833,6 +2062,64 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             );
           })}
 
+          {/* Sofa Accessory pieces — above the modules and any composite art,
+              so a tap reaches them. Drawn off the live module positions; the
+              piece being dragged follows the pointer until it lands. */}
+          {accRects.map((r) => {
+            const piece = accessories.find((p) => p.id === r.id);
+            const o = piece ? accessoryById.get(piece.modelId) : undefined;
+            if (!piece || !o) return null;
+            const drag = accDrag?.id === r.id ? accDrag : null;
+            const isSel = selectedAccessoryId === r.id;
+            const roleClass = r.role === 'arm' ? styles.accessoryArm : r.role === 'back-support' ? styles.accessorySupport : styles.accessoryBack;
+            return (
+              <div
+                key={r.id}
+                className={`${styles.accessory} ${roleClass} ${isSel ? styles.accessorySelected : ''}`}
+                style={{
+                  left: (r.rect.x + (drag?.dx ?? 0)) * SCALE,
+                  top: (r.rect.y + (drag?.dy ?? 0)) * SCALE,
+                  width: r.rect.w * SCALE,
+                  height: r.rect.h * SCALE,
+                }}
+                onPointerDown={(e) => onAccessoryPointerDown(r.id, e)}
+                onPointerMove={onAccessoryPointerMove}
+                onPointerUp={onAccessoryPointerUp}
+                onPointerCancel={onAccessoryPointerUp}
+                title={`${o.name} · ${SOFA_ACCESSORY_ROLE_LABEL[o.role]}`}
+                aria-label={`${o.name} · ${SOFA_ACCESSORY_ROLE_LABEL[o.role]}`}
+              >
+                <span className={styles.accessorySeam} aria-hidden />
+                {piece.fabric?.colourHex && (
+                  <span className={styles.accessoryDot} style={{ background: piece.fabric.colourHex }} aria-hidden />
+                )}
+                {isSel && !drag && (
+                  <div className={styles.accessoryTools} onPointerDown={(e) => e.stopPropagation()}>
+                    <span className={styles.groupToolsLabel}>{o.code}</span>
+                    <button
+                      type="button"
+                      className={styles.accessoryToolBtn}
+                      onClick={() => setAccessoryColourFor(piece.id)}
+                      title="Colour"
+                      aria-label={`Colour of ${o.name}`}
+                    >
+                      <Palette size={12} strokeWidth={2} />
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.groupToolsBtn}
+                      onClick={() => removeAccessory(piece.id)}
+                      title="Remove"
+                      aria-label={`Remove ${o.name}`}
+                    >
+                      <Trash2 size={12} strokeWidth={2} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
           {cells.length === 0 && (
             <div className={styles.emptyOverlay}>
               <div className={styles.emptyTitle}>Empty room</div>
@@ -1945,7 +2232,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
             {/* extraAmountRm is per-unit on the LEAD group only (see handleAdd),
                 so it's added ONCE here — not × groups.length like fabric/leg. */}
-            <PriceTag className={styles.footerPrice} amount={priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm} size="lg" />
+            <PriceTag className={styles.footerPrice} amount={Math.round(priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm + accessoriesRm)} size="lg" />
             {/* Combo cue (HOOKKA parity) — when any group priced via a combo,
                 show the savings the combo gave over the matched subset's own
                 à-la-carte sum. Extra modules outside the combo subset stay at
@@ -2042,6 +2329,72 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             onSaved={() => setCreateComboOpen(false)}
           />
         )}
+        {/* A Sofa Accessory piece's colour (owner 2026-10-16: it may differ
+            from the sofa's). Same fabric range as the sofa; no tier add-on —
+            Houzs adds none to a Sofa Accessory. */}
+        {accessoryColourFor && (() => {
+          const piece = accessories.find((p) => p.id === accessoryColourFor);
+          const o = piece ? accessoryById.get(piece.modelId) : undefined;
+          if (!piece || !o) return null;
+          const sofaColour = fabricSel ? `${fabricSel.fabricLabel} / ${fabricSel.colourLabel ?? 'Colour KIV'}` : 'not chosen yet';
+          return (
+            <div
+              className={styles.dialogBackdrop}
+              style={{
+                position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+                display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+                padding: '8vh 16px', zIndex: 1000,
+              }}
+              onClick={() => setAccessoryColourFor(null)}
+            >
+              <div
+                className={styles.dialogPanel}
+                role="dialog"
+                aria-modal="true"
+                aria-label={`Colour · ${o.name}`}
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  background: 'var(--c-paper)', borderRadius: 'var(--radius-md)',
+                  padding: 24, width: '100%', maxWidth: 520, maxHeight: '84vh', overflowY: 'auto',
+                  display: 'flex', flexDirection: 'column', gap: 16,
+                }}
+              >
+                <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 'var(--fs-18)' }}>
+                  Colour · {o.name}
+                </h3>
+                <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
+                  This piece is made in the sofa&apos;s fabric ({sofaColour}) unless you choose another here.
+                </p>
+                <div>
+                  <Button
+                    variant={piece.fabric ? 'ghost' : 'secondary'}
+                    size="sm"
+                    onClick={() => setAccessoryFabric(piece.id, undefined)}
+                  >
+                    Same as the sofa
+                  </Button>
+                </div>
+                <FabricColourPicker
+                  productFabrics={fabricSeriesRows}
+                  fabricId={piece.fabric?.fabricId ?? null}
+                  colourId={piece.fabric?.colourId ?? null}
+                  onChange={(sel) => setAccessoryFabric(piece.id, {
+                    fabricId: sel.fabricId,
+                    colourId: sel.colourId,
+                    fabricLabel: sel.fabricLabel,
+                    colourLabel: sel.colourLabel,
+                    colourHex: sel.colourHex,
+                  })}
+                  category="SOFA"
+                  enabledColourIds={productId?.startsWith('mfg-') ? fabricCodes : null}
+                />
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <Button variant="primary" onClick={() => setAccessoryColourFor(null)}>Done</Button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </section>
     </div>
   );

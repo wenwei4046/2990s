@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router';
 import { Trash2, BookmarkPlus, Check, Pencil, Plus, Gift, Undo2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, campaignsCoveringLine } from '@2990s/shared';
-import { useCart, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
+import { useCart, accessoryOfKey, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
 import { cartLineTitle, useMfgCatalogIndex } from '../lib/cart-display';
 import { useSaveQuote } from '../lib/quotes';
 import { useFreePwpCodes } from '../lib/products/pwp-queries';
@@ -222,7 +222,10 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit, activeCampaigns, comb
     cells?: Array<{ moduleId?: string }>;
   };
   const alreadyFree = Boolean(cfgAny.freeItemCampaignId);
-  const blocked = Boolean(cfgAny.pwp) || Boolean(cfgAny.isFreeGift);
+  // A Sofa Accessory line belongs to its sofa line: its qty follows the sofa
+  // and it changes only by editing the sofa's Custom build (state/cart.ts).
+  const ofSofa = Boolean(accessoryOfKey(line.config));
+  const blocked = Boolean(cfgAny.pwp) || Boolean(cfgAny.isFreeGift) || ofSofa;
   // MfgCatalogRow uses camelCase: modelId + category (uppercase enum e.g. 'SOFA').
   const covering = (blocked || alreadyFree) ? [] : campaignsCoveringLine(
     {
@@ -269,6 +272,8 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit, activeCampaigns, comb
         type="button"
         className={styles.qtyBtn}
         onClick={() => onSetQty(line.key, line.qty - 1)}
+        disabled={ofSofa}
+        title={ofSofa ? 'Follows the sofa — change it in the sofa’s Custom build' : undefined}
         aria-label="Decrease quantity"
       >−</button>
       <span className={styles.qty}>{line.qty}</span>
@@ -278,8 +283,8 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit, activeCampaigns, comb
         onClick={() => onSetQty(line.key, line.qty + 1)}
         // One code = one redemption = one unit — the store clamps too; this
         // disable is the affordance (Loo 2026-06-12).
-        disabled={('pwp' in line.config && line.config.pwp === true) || ('isFreeGift' in line.config && line.config.isFreeGift === true)}
-        title={('isFreeGift' in line.config && line.config.isFreeGift === true) ? 'Free gift — quantity follows the qualifying item' : ('pwp' in line.config && line.config.pwp === true ? 'PWP — one unit per code' : undefined)}
+        disabled={ofSofa || ('pwp' in line.config && line.config.pwp === true) || ('isFreeGift' in line.config && line.config.isFreeGift === true)}
+        title={ofSofa ? 'Follows the sofa — change it in the sofa’s Custom build' : ('isFreeGift' in line.config && line.config.isFreeGift === true) ? 'Free gift — quantity follows the qualifying item' : ('pwp' in line.config && line.config.pwp === true ? 'PWP — one unit per code' : undefined)}
         aria-label="Increase quantity"
       >+</button>
     </div>
@@ -320,11 +325,13 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit, activeCampaigns, comb
           {covering.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
       ) : null}
-      <IconButton
-        icon={<Trash2 size={18} strokeWidth={1.75} />}
-        aria-label="Remove line"
-        onClick={() => onRemove(line.key)}
-      />
+      {!ofSofa && (
+        <IconButton
+          icon={<Trash2 size={18} strokeWidth={1.75} />}
+          aria-label="Remove line"
+          onClick={() => onRemove(line.key)}
+        />
+      )}
     </div>
   </li>
   );

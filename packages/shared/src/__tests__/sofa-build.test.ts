@@ -819,6 +819,39 @@ describe('analyzeSofa closure', () => {
     expect(r.reason).toBe('No arms on either end');
   });
 
+  it('closes an armless run with a clip-on arm at each open end', () => {
+    const group: Cell[] = [
+      { id: 'a', moduleId: '1NA', x: 0,  y: 0, rot: 0 },
+      { id: 'b', moduleId: '1NA', x: 75, y: 0, rot: 0 },
+    ];
+    expect(analyzeSofa(group, '24').reason).toBe('No arms on either end');
+    const one = analyzeSofa(group, '24', { extraArms: [{ cellId: 'a', edge: 0 }] });
+    expect(one.closed).toBe(false);
+    expect(one.reason).toBe('Right end has no arm');
+    const both = analyzeSofa(group, '24', { extraArms: [{ cellId: 'a', edge: 0 }, { cellId: 'b', edge: 2 }] });
+    expect(both.closed).toBe(true);
+    expect(both.reason).toBeNull();
+  });
+
+  it('measures a lone 1NA with clip-on arms by its arms, not its depth', () => {
+    // 75 wide × 95 deep reads as a sofa running top-to-bottom; with two 20cm
+    // arms it is 115 long, left to right.
+    const lone: Cell[] = [{ id: 'a', moduleId: '1NA', x: 0, y: 0, rot: 0 }];
+    const arms = [{ cellId: 'a', edge: 0 as const, widthCm: 20 }, { cellId: 'a', edge: 2 as const, widthCm: 20 }];
+    expect(analyzeSofa(lone, '24', { extraArms: arms }).closed).toBe(true);
+    expect(analyzeSofa(lone, '24', { extraArms: arms.map(({ cellId, edge }) => ({ cellId, edge })) }).closed).toBe(false);
+  });
+
+  it('ignores a clip-on arm that is not on an outward open end', () => {
+    // a's E edge touches b: it is not an end, so an "arm" there closes nothing.
+    const group: Cell[] = [
+      { id: 'a', moduleId: '1A(LHF)', x: 0,  y: 0, rot: 0 },
+      { id: 'b', moduleId: '1NA',     x: 95, y: 0, rot: 0 },
+    ];
+    expect(analyzeSofa(group, '24', { extraArms: [{ cellId: 'a', edge: 2 }] }).closed).toBe(false);
+    expect(analyzeSofa(group, '24', { extraArms: [{ cellId: 'b', edge: 2 }] }).closed).toBe(true);
+  });
+
   it('flags arm-to-arm collision', () => {
     // 1A(RHF) (arm E) at x=0 touches 1A(LHF) (arm W) at x=95.
     const group: Cell[] = [
