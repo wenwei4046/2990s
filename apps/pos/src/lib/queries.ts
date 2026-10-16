@@ -3,6 +3,13 @@ import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCo
 import { comboChargedPrices, maintActiveValues, type MfgSeatHeightPrice, type DefaultFreeGift, type FreeItemEligibility, type FreeItemCampaign, type RuleTarget } from '@2990s/shared';
 import { authedFetch, authedFetchRaw, API_URL, IS_HOUZS, HOUZS_COMPANY_ID, houzsApiRoot, posApiBase } from './apiClient';
 import { useMaintenanceConfig, type MaintenanceResolved } from './products/mfg-products-queries';
+import {
+  DEFAULT_ARM_WIDTH_CM,
+  guessAccessoryRole,
+  readAccessoryPlacement,
+  readSofaAccessoryIds,
+  type SofaAccessoryOption,
+} from './sofa-accessories';
 
 /* ─── Houzs seam helpers (P4.3) ───────────────────────────────────────────
  * The configurator resolves a SKU (mfg_products.id) → its Model's
@@ -1157,6 +1164,10 @@ export interface SofaCustomizerData {
    *  The Configurator maps these → their series via fabric_colours, then filters
    *  the colour swatches to this set. */
   fabricIds:    string[];
+  /** Sofa Accessories this Model offers on the canvas (allowed_options.
+   *  sofa_accessories), each resolved to its sellable SKU — lib/sofa-accessories.ts.
+   *  One the catalogue no longer sells (SKU or Model switched off) is left out. */
+  accessories:  SofaAccessoryOption[];
   /** The Model row that resolved (so caller can show Model name / branding). */
   modelId:      string;
   modelName:    string;
@@ -1303,6 +1314,29 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
         };
       });
 
+      // Step 3: the Sofa Accessories ticked on this Model (owner 2026-10-16).
+      // Each is a Model with one SKU; ?modelId reads it whatever its status, so
+      // keep only what the catalogue would sell — an inactive SKU or Model is
+      // refused by Houzs as unknown_item_code.
+      const accessoryRows = await Promise.all(
+        readSofaAccessoryIds(model.allowed_options).map((id) => fetchMfgCatalog({ modelId: id }).catch(() => [])),
+      );
+      const accessories: SofaAccessoryOption[] = accessoryRows.flatMap((rows) => {
+        const r = rows.find((x) => x.status === 'ACTIVE' && x.pos_active !== false && x.product_models?.active !== false);
+        const accModel = r?.product_models;
+        if (!r || !accModel) return [];
+        const placement = readAccessoryPlacement(accModel.allowed_options);
+        return [{
+          modelId:    accModel.id,
+          productId:  r.id,
+          code:       r.code,
+          name:       r.name,
+          priceSen:   r.sell_price_sen,
+          role:       placement?.role ?? guessAccessoryRole(r.name, r.code),
+          armWidthCm: placement?.armWidthCm ?? DEFAULT_ARM_WIDTH_CM,
+        }];
+      });
+
       return {
         compartments,
         sellingRows,
@@ -1312,6 +1346,7 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
         // Fabric IDs commander ticked on this Model (from allowed_options.fabrics).
         // Empty array = no fabrics configured → Configurator hides fabric picker.
         fabricIds:  (allowed as { fabrics?: string[] }).fabrics ?? [],
+        accessories,
         modelId:    model.id,
         modelName:  model.name,
         modelCode:  model.model_code,

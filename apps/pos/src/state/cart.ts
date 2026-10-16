@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { buildVariantSummary, summarizeSofaCells, type Cell, type Depth, type DesiredFreeGift } from '@2990s/shared';
 import { clearHandoverFormSnapshot } from '../lib/handover-helpers';
+import type { AccessoryLine, PlacedAccessory } from '../lib/sofa-accessories';
 
 /**
  * Cart line snapshot. The `total` field is what we display in the cart and
@@ -70,6 +71,10 @@ export interface SofaConfigSnapshot {
   freeItemCampaignId?: string | null;
   freeItemCampaign?: string | null;
   freeItemOriginalTotal?: number;
+  /** Sofa Accessory pieces placed on this build (owner 2026-10-16) — kept so
+   *  Edit puts them back on the canvas. They are SOLD by their own flat lines
+   *  (accessoryOfKey = this line's key), never priced into `total`. */
+  accessories?: PlacedAccessory[];
   total: number;
   summary: string;       // e.g. "3+L · Bundle · Velvet/Sand"
 }
@@ -147,6 +152,19 @@ export interface FlatConfigSnapshot {
   freeItemCampaignId?: string | null;
   freeItemCampaign?: string | null;
   freeItemOriginalTotal?: number;
+  /** Sofa Accessory (owner 2026-10-16, lib/sofa-accessories.ts): pieces placed
+   *  on the sofa line `accessoryOfKey`. The line follows that sofa — qty =
+   *  accessoryPerSofa × the sofa's qty, removed with it, changed only by
+   *  editing the sofa — and carries the fabric its SO line needs (Houzs wants a
+   *  colour on every Sofa Accessory). `total` is the exact selling price. */
+  accessoryOfKey?: string;
+  accessoryPerSofa?: number;
+  modelId?: string | null;
+  fabricId?: string;
+  fabricLabel?: string;
+  colourId?: string;
+  colourLabel?: string;
+  colourHex?: string;
   total: number;
   summary: string;       // e.g. "Flat price"
 }
@@ -257,6 +275,9 @@ interface CartState {
   revertPwp: (key: string) => void;
   /** 0170 — make the cart's free-gift lines match `desired` (add/update/remove). */
   reconcileFreeGifts(desired: DesiredFreeGift[], nameById: Map<string, string>): void;
+  /** Replace a sofa line's Sofa Accessory lines with `lines` (one per accessory
+   *  × fabric), placed right after the sofa. [] removes them. */
+  setSofaAccessories(sofaKey: string, lines: AccessoryLine[]): void;
   /** Make a line free under an active campaign (mig 0176). Frees up to
    *  cap units; if qty > cap, splits a free line (qty=cap) off the paid one. */
   makeFree(key: string, campaign: { id: string; name: string; maxFreeQty: number }): void;
@@ -298,6 +319,43 @@ const isPwpReward = (c: CartConfig): boolean => (c as { pwp?: boolean }).pwp ===
 
 const isFreeItemLine = (c: CartConfig): boolean =>
   Boolean((c as { freeItemCampaignId?: string | null }).freeItemCampaignId);
+
+/** The sofa line a Sofa Accessory line belongs to, or undefined. */
+export const accessoryOfKey = (c: CartConfig): string | undefined =>
+  c.kind === 'flat' ? c.accessoryOfKey : undefined;
+
+const accessoryLineKey = (sofaKey: string, a: AccessoryLine): string =>
+  `${sofaKey}~${a.modelId}~${a.fabric?.fabricId ?? ''}~${a.fabric?.colourId ?? ''}`;
+
+/** The cart line for one accessory × fabric on a sofa. */
+export const sofaAccessoryLine = (sofaKey: string, sofaQty: number, a: AccessoryLine): CartLine => {
+  const fabric = a.fabric
+    ? `${a.fabric.fabricLabel} / ${a.fabric.colourLabel ?? 'Colour KIV'}`
+    : 'Fabric to confirm';
+  return {
+    key: accessoryLineKey(sofaKey, a),
+    qty: a.qtyPerSofa * Math.max(1, sofaQty),
+    config: {
+      kind: 'flat',
+      productId: a.productId,
+      productName: a.name,
+      category: 'FABRIC_ACCESSORY',
+      modelId: a.modelId,
+      accessoryOfKey: sofaKey,
+      accessoryPerSofa: a.qtyPerSofa,
+      ...(a.fabric ? {
+        fabricId: a.fabric.fabricId,
+        fabricLabel: a.fabric.fabricLabel,
+        ...(a.fabric.colourId ? { colourId: a.fabric.colourId } : {}),
+        ...(a.fabric.colourLabel ? { colourLabel: a.fabric.colourLabel } : {}),
+        ...(a.fabric.colourHex ? { colourHex: a.fabric.colourHex } : {}),
+      } : {}),
+      // Exact sen → ringgit; the handover multiplies back without rounding loss.
+      total: a.unitPriceSen / 100,
+      summary: `Sofa accessory · ${fabric}`,
+    },
+  };
+};
 
 const sanitizeQty = (config: CartConfig, qty: number | undefined, fallback = 1): number =>
   isPwpReward(config) ? 1 : Math.max(1, Math.floor(qty ?? fallback));
@@ -372,16 +430,37 @@ export const useCart = create<CartState>()((set, get) => ({
   setQty(key, qty) {
     const line = get().lines.find((l) => l.key === key);
     if (line && isFreeItemLine(line.config)) return;   // free-item qty is fixed (the freed quantity)
+    if (line && accessoryOfKey(line.config)) return;    // follows its sofa
     if (qty < 1) { get().remove(key); return; }
     set({
-      lines: get().lines.map((l) =>
-        l.key === key ? { ...l, qty: sanitizeQty(l.config, qty) } : l,
-      ),
+      lines: get().lines.map((l) => {
+        if (l.key === key) return { ...l, qty: sanitizeQty(l.config, qty) };
+        // A sofa's accessories come in the same number of sets as the sofa.
+        if (accessoryOfKey(l.config) === key) {
+          const per = (l.config as FlatConfigSnapshot).accessoryPerSofa ?? 1;
+          return { ...l, qty: per * Math.max(1, Math.floor(qty)) };
+        }
+        return l;
+      }),
     });
   },
 
   remove(key) {
-    set({ lines: get().lines.filter((l) => l.key !== key) });
+    // A sofa takes its accessory lines with it.
+    set({ lines: get().lines.filter((l) => l.key !== key && accessoryOfKey(l.config) !== key) });
+  },
+
+  setSofaAccessories(sofaKey, accLines) {
+    const lines = get().lines;
+    const rest = lines.filter((l) => accessoryOfKey(l.config) !== sofaKey);
+    const at = rest.findIndex((l) => l.key === sofaKey);
+    if (at === -1) {
+      if (rest.length !== lines.length) set({ lines: rest });
+      return;
+    }
+    const mine = accLines.map((a) => sofaAccessoryLine(sofaKey, rest[at]!.qty, a));
+    if (mine.length === 0 && rest.length === lines.length) return;
+    set({ lines: [...rest.slice(0, at + 1), ...mine, ...rest.slice(at + 1)] });
   },
 
   adoptServerPrice(key, totalRM) {
@@ -424,6 +503,9 @@ export const useCart = create<CartState>()((set, get) => ({
     // freeItemOriginalTotal: 0 (total is already 0), which would make a
     // later revert restore the price to RM0 instead of the real original.
     if (isFreeItemLine(line.config)) return;
+    // A Sofa Accessory line is rebuilt from its sofa on every edit; a split-off
+    // free copy would be orphaned by that, so it is never made free here.
+    if (accessoryOfKey(line.config)) return;
     const cap = Math.max(1, Math.floor(campaign.maxFreeQty));
     const freeQty = Math.min(line.qty, cap);
     const original = line.config.total;

@@ -244,7 +244,7 @@ export const readSoMoney = (
 
 export interface PosHandoffItem {
   itemCode: string;
-  itemGroup: 'sofa' | 'bedframe' | 'mattress' | 'accessory' | 'others';
+  itemGroup: 'sofa' | 'bedframe' | 'mattress' | 'accessory' | 'fabric_accessory' | 'others';
   description: string;
   qty: number;
   /** Centi-MYR. LEGACY SPELLING — see soMoneyPayload. */
@@ -436,6 +436,10 @@ export const inferItemGroup = (
   if (config.kind === 'sofa') return 'sofa';
   if (config.kind === 'bedframe') return 'bedframe';
   const fromConfig = 'category' in config && config.category ? String(config.category).toLowerCase() : '';
+  // Sofa Accessory — Houzs's own group name, so its create gate asks for the
+  // fabric the line carries (and never a seat size, as anything matching
+  // 'sofa' below would).
+  if (fromConfig === 'fabric_accessory') return 'fabric_accessory';
   const categoryId = fromConfig || (product?.category?.id?.toLowerCase() ?? '');
   if (categoryId.includes('mattress')) return 'mattress';
   if (categoryId.includes('sofa')) return 'sofa';
@@ -660,6 +664,20 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     if (config.extraAddonNote?.trim())  v.extraAddonNote = config.extraAddonNote.trim();
     if ((config.extraAddonAmountRM ?? 0) > 0) v.extraAddonAmountRM = config.extraAddonAmountRM;
     if (config.summary)               v.summary = config.summary;
+    return v;
+  }
+  // A Sofa Accessory (owner 2026-10-16) carries its fabric: Houzs requires one
+  // on every fabric_accessory line (so-variant-rule: fabricCode or an alias),
+  // keys its stock by it and checks it against the accessory Model's pool
+  // (fabricCode / colourId, or the series via fabricId). ONLY fabric keys — the
+  // leg / specials / seat pools are checked for every category, so a sofa's
+  // depth or leg copied here would be refused or print on the line.
+  if (config.category === 'FABRIC_ACCESSORY' && config.fabricId) {
+    const v: Record<string, unknown> = { fabricId: config.fabricId };
+    if (config.fabricLabel) v.fabricLabel = config.fabricLabel;
+    if (config.colourId) { v.colourId = config.colourId; v.fabricCode = config.colourId; }
+    if (config.colourLabel) v.colourLabel = config.colourLabel;
+    if (config.colourHex) v.colourHex = config.colourHex;
     return v;
   }
   // flat — nothing to capture beyond the product itself.

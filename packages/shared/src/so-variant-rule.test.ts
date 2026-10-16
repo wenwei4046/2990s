@@ -68,6 +68,16 @@ describe('missingVariantAxes — bedframe', () => {
   });
 });
 
+describe('missingVariantAxes — Sofa Accessory (fabric_accessory)', () => {
+  it('needs the fabric colour and nothing else, as Houzs does', () => {
+    // The shape pos-handover-so.ts buildVariants() sends for an accessory line.
+    expect(missingKeys('fabric_accessory', { fabricId: 'CG', fabricLabel: 'CG', colourId: 'CG-002', fabricCode: 'CG-002' })).toEqual([]);
+    // Colour still KIV: series only.
+    expect(missingKeys('fabric_accessory', { fabricId: 'CG', fabricLabel: 'CG' })).toEqual(['fabricCode']);
+    expect(missingKeys('fabric_accessory', null)).toEqual(['fabricCode']);
+  });
+});
+
 describe('missingVariantAxes — categories without mandatory variants', () => {
   it.each(['mattress', 'accessory', 'others', 'service', '', null, undefined])(
     'group %s never reports missing axes',

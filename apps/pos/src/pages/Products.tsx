@@ -125,6 +125,15 @@ import { RuleTargetPicker, finalizeRuleTargets } from '../components/products/Ru
 import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
 import { compareProductCategories, isSingleSkuCategory, productCategoryChips, productCategoryLabel } from '../lib/products/product-categories';
+import {
+  DEFAULT_ARM_WIDTH_CM,
+  SOFA_ACCESSORY_ROLE_LABEL,
+  guessAccessoryRole,
+  readAccessoryPlacement,
+  readSofaAccessoryIds,
+  type SofaAccessoryPlacement,
+  type SofaAccessoryRole,
+} from '../lib/sofa-accessories';
 import { readMoney } from '../lib/houzs-money-keys';
 import { useStaff } from '../lib/staff';
 import { useMaintainAccess } from '../lib/houzs-perms';
@@ -1135,6 +1144,9 @@ const ModelAllowedOptionsDrawer = ({
   // after `if (model.isLoading) return` causes a "Rendered more hooks" crash
   // that tsc/vite don't catch).
   const specialAddons = useSpecialAddons();
+  // Sofa Accessory models a SOFA Model can offer on its canvas (owner
+  // 2026-10-16, lib/sofa-accessories.ts). Same hooks-order rule as above.
+  const accessoryModels = useProductModels({ category: 'FABRIC_ACCESSORY' });
   const coloursBySeries = useMemo(() => {
     const mp = new Map<string, { colourId: string; label: string }[]>();
     for (const c of (fabricColours.data ?? [])) {
@@ -1254,6 +1266,16 @@ const ModelAllowedOptionsDrawer = ({
   const specialAddonPool: string[] = (specialAddons.data ?? [])
     .filter((a) => a.active && a.categories.includes(m.category))
     .map((a) => a.code);
+  // Sofa Accessories (owner 2026-10-16): ticked ones show in this Model's
+  // Custom build palette. Stored by accessory MODEL id — a code rename in Houzs
+  // re-points item codes, never ids. An accessory switched off stays listed
+  // while still ticked here, so it can be unticked.
+  const tickedAccessories = new Set(isSofa ? readSofaAccessoryIds(draft) : []);
+  const sofaAccessoryPool = isSofa
+    ? (accessoryModels.data ?? [])
+      .filter((a) => a.active || tickedAccessories.has(a.id))
+      .map((a) => ({ id: a.id, label: a.active ? a.name : `${a.name} (off)` }))
+    : [];
 
   const d = draft ?? {};
   const isTicked = (pool: keyof AllowedOptions, v: string): boolean => {
@@ -1347,6 +1369,12 @@ const ModelAllowedOptionsDrawer = ({
               {activeDraft ? 'On' : 'Off'}
             </button>
           </div>
+          {m.category === 'FABRIC_ACCESSORY' && (
+            <AccessoryPlacementSection
+              placement={readAccessoryPlacement(d) ?? { role: guessAccessoryRole(m.name, m.model_code) }}
+              onChange={(placement) => setDraft((prev) => ({ ...(prev ?? {}), placement }))}
+            />
+          )}
         </>
       ) : (
         <>
@@ -1396,6 +1424,15 @@ const ModelAllowedOptionsDrawer = ({
               pool={specialAddonPool}
               isTicked={(v) => isTicked('specials', v)}
               onToggle={(v) => toggle('specials', v)}
+            />
+          )}
+          {isSofa && sofaAccessoryPool.length > 0 && (
+            <AllowedOptionsSection
+              label="Sofa accessories"
+              pool={sofaAccessoryPool.map((a) => a.id)}
+              labelOf={(id) => sofaAccessoryPool.find((a) => a.id === id)?.label ?? id}
+              isTicked={(v) => isTicked('sofa_accessories', v)}
+              onToggle={(v) => toggle('sofa_accessories', v)}
             />
           )}
 
@@ -1486,11 +1523,14 @@ const DrawerShell = ({
 const AllowedOptionsSection = ({
   label,
   pool,
+  labelOf,
   isTicked,
   onToggle,
 }: {
   label: string;
   pool: string[];
+  /** Chip text when the stored value is not readable (an id). */
+  labelOf?: (v: string) => string;
   isTicked: (v: string) => boolean;
   onToggle: (v: string) => void;
 }) => (
@@ -1525,13 +1565,90 @@ const AllowedOptionsSection = ({
               transition: 'background 120ms ease, color 120ms ease, border-color 120ms ease',
             }}
           >
-            {v}
+            {labelOf ? labelOf(v) : v}
           </button>
         );
       })}
     </div>
   </div>
 );
+
+/* Where a Sofa Accessory goes on the canvas (owner 2026-10-16) — stored as
+   allowed_options.placement on the accessory's Model, read by the Custom build
+   (lib/sofa-accessories.ts). Until set, the role is read off the name. */
+const PLACEMENT_HINT: Record<SofaAccessoryRole, string> = {
+  back: 'Sits on a seat, against the backrest. One a seat.',
+  'back-support': 'Goes behind a back cushion on the same seat, so the seat needs its back cushion first.',
+  arm: 'Clips onto an armless end of the sofa. The sofa gets wider by its width.',
+};
+
+const AccessoryPlacementSection = ({
+  placement,
+  onChange,
+}: {
+  placement: SofaAccessoryPlacement;
+  onChange: (next: SofaAccessoryPlacement) => void;
+}) => {
+  const armWidth = placement.armWidthCm ?? DEFAULT_ARM_WIDTH_CM;
+  return (
+    <div style={{ marginTop: 'var(--space-5)' }}>
+      <div style={{
+        fontFamily: 'var(--font-button)',
+        fontSize: 'var(--fs-12)',
+        fontWeight: 600,
+        letterSpacing: '0.08em',
+        textTransform: 'uppercase',
+        color: 'var(--fg-muted)',
+        marginBottom: 'var(--space-2)',
+      }}>On the sofa</div>
+      <div role="radiogroup" aria-label="On the sofa" style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+        {(['back', 'back-support', 'arm'] as const).map((role) => {
+          const on = placement.role === role;
+          return (
+            <button
+              key={role}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              onClick={() => onChange(role === 'arm' ? { role, armWidthCm: armWidth } : { role })}
+              style={{
+                padding: '4px 12px',
+                borderRadius: 999,
+                border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line)'}`,
+                background: on ? 'var(--c-orange)' : 'var(--c-cream)',
+                color: on ? 'var(--c-paper)' : 'var(--c-ink)',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--fs-13)',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {SOFA_ACCESSORY_ROLE_LABEL[role]}
+            </button>
+          );
+        })}
+      </div>
+      <p className={styles.eyebrow} style={{ marginTop: 'var(--space-2)' }}>{PLACEMENT_HINT[placement.role]}</p>
+      {placement.role === 'arm' && (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginTop: 'var(--space-2)', fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', color: 'var(--c-ink)' }}>
+          Arm width (cm)
+          <input
+            type="number"
+            min={5}
+            max={60}
+            step={1}
+            value={armWidth}
+            onChange={(e) => {
+              const v = Math.round(Number(e.target.value));
+              if (Number.isFinite(v) && v > 0) onChange({ role: 'arm', armWidthCm: v });
+            }}
+            style={{ width: 72, padding: '6px 8px', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)', fontSize: 'var(--fs-13)' }}
+          />
+        </label>
+      )}
+    </div>
+  );
+};
 
 /* FABRICS section for the Modular drawer (Chairman 2026-06-01). On/off is per
    COLOUR (the single authority), grouped under its SERIES header. The chip text

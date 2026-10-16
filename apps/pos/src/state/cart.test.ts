@@ -8,6 +8,7 @@ import {
   type CartLine,
   type CartConfig,
   type SizeConfigSnapshot,
+  type FlatConfigSnapshot,
 } from './cart';
 import { freeGiftLineKey, type DesiredFreeGift } from '@2990s/shared';
 
@@ -342,5 +343,47 @@ describe('adoptServerPrice', () => {
     const key = useCart.getState().addConfigured(size(990), { qty: 1 });
     useCart.getState().adoptServerPrice('does-not-exist', 1980);
     expect(useCart.getState().lines.find((x) => x.key === key)!.config.total).toBe(990);
+  });
+});
+
+describe('Sofa Accessory lines follow their sofa', () => {
+  beforeEach(() => { useCart.getState().clear(); });
+
+  const sofa = (): CartConfig => ({ kind: 'sofa', productId: 'mfg-sofa', productName: 'Annsa', total: 2990, summary: '' });
+  const cushion = { modelId: 'm-bc06', productId: 'mfg-bc06', code: 'BC06', name: 'BACK CUSHION 06', unitPriceSen: 13550, qtyPerSofa: 2,
+    fabric: { fabricId: 'CG', colourId: 'CG-002', fabricLabel: 'CG', colourLabel: 'Sand', colourHex: '#c5b9a8' } };
+  const arm = { modelId: 'm-ar01', productId: 'mfg-ar01', code: 'AR01', name: 'ARM REST 01', unitPriceSen: 8000, qtyPerSofa: 1, fabric: null };
+
+  it('adds one line per accessory × fabric right after the sofa, at the exact price', () => {
+    const other = useCart.getState().addConfigured(sofa());
+    const key = useCart.getState().addConfigured(sofa());
+    useCart.getState().setSofaAccessories(other, []);
+    useCart.getState().setSofaAccessories(key, [cushion, arm]);
+    const lines = useCart.getState().lines;
+    expect(lines.map((l) => l.key)).toEqual([other, key, `${key}~m-bc06~CG~CG-002`, `${key}~m-ar01~~`]);
+    const c = lines[2]!.config as FlatConfigSnapshot;
+    expect([lines[2]!.qty, c.total, c.category, c.colourId, c.accessoryOfKey]).toEqual([2, 135.5, 'FABRIC_ACCESSORY', 'CG-002', key]);
+    expect((lines[3]!.config as FlatConfigSnapshot).summary).toBe('Sofa accessory · Fabric to confirm');
+  });
+
+  it('replaces them on the next edit and drops them with the sofa', () => {
+    const key = useCart.getState().addConfigured(sofa());
+    useCart.getState().setSofaAccessories(key, [cushion, arm]);
+    useCart.getState().setSofaAccessories(key, [arm]);
+    expect(useCart.getState().lines).toHaveLength(2);
+    useCart.getState().remove(key);
+    expect(useCart.getState().lines).toEqual([]);
+  });
+
+  it('scales with the sofa qty and cannot be changed on its own', () => {
+    const key = useCart.getState().addConfigured(sofa());
+    useCart.getState().setSofaAccessories(key, [cushion]);
+    useCart.getState().setQty(key, 3);
+    const acc = () => useCart.getState().lines[1]!;
+    expect(acc().qty).toBe(6);
+    useCart.getState().setQty(acc().key, 1);
+    expect(acc().qty).toBe(6);
+    useCart.getState().makeFree(acc().key, { id: 'c', name: 'C', maxFreeQty: 9 });
+    expect((acc().config as FlatConfigSnapshot).freeItemCampaignId).toBeUndefined();
   });
 });
