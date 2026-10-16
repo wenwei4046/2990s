@@ -30,6 +30,7 @@ import {
   type PwpRuleRow,
 } from '../../lib/products/pwp-queries';
 import { useMfgProducts } from '../../lib/products/mfg-products-queries';
+import { productCategoryLabel } from '../../lib/products/product-categories';
 import {
   useModelDefaultGifts,
   useUpsertModelDefaultGifts,
@@ -288,7 +289,7 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
               {withGifts.map((m) => (
                 <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)', padding: '8px 12px', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', background: 'var(--c-paper)' }}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 'var(--fs-14)' }}>{giftModelLabel(m)} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>· {m.category}</span></div>
+                    <div style={{ fontWeight: 600, fontSize: 'var(--fs-14)' }}>{giftModelLabel(m)} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>· {productCategoryLabel(m.category)}</span></div>
                     <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-soft)' }}>
                       {(giftsByModel.get(m.id) ?? []).map((g) => `${g.qty}× ${accName(g.giftProductId)}`).join(', ')}
                     </div>

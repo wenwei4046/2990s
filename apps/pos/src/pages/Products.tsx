@@ -124,6 +124,7 @@ import { CampaignPromosTab } from '../components/products/CampaignPromosTab';
 import { RuleTargetPicker, finalizeRuleTargets } from '../components/products/RuleTargetPicker';
 import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
+import { compareProductCategories, isSingleSkuCategory, productCategoryChips, productCategoryLabel } from '../lib/products/product-categories';
 import { readMoney } from '../lib/houzs-money-keys';
 import { useStaff } from '../lib/staff';
 import { useMaintainAccess } from '../lib/houzs-perms';
@@ -828,6 +829,13 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
   const { data: models, isLoading } = useProductModels({
     category: filter === 'all' ? undefined : filter,
   });
+  // Chips come off the unfiltered list (lib/products/product-categories.ts) —
+  // the same query as the All view, so it costs no extra request there.
+  const { data: everyModel } = useProductModels();
+  const categoryChips = useMemo(
+    () => productCategoryChips((everyModel ?? []).map((m) => m.category), filter),
+    [everyModel, filter],
+  );
 
   /* Per-Model SKU counts — derived from mfg_products.base_model. Backend
      has its own server-side count via the rich endpoint; POS does a single
@@ -847,13 +855,13 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    // Show INACTIVE flat-category models too (accessory/service) so an admin can
-    // re-enable one from POS — the "Show in POS" on/off lives in the drawer, and
-    // toggling it off must not make the card vanish (you'd never get it back).
-    // Other categories stay active-only here; their inactive models are managed
-    // from the Backend portal.
+    // Show INACTIVE single-SKU models too (accessory/service/sofa accessory…) so
+    // an admin can re-enable one from POS — the "Show in POS" on/off lives in the
+    // drawer, and toggling it off must not make the card vanish (you'd never get
+    // it back). Sofa / bedframe / mattress stay active-only here; their inactive
+    // models are managed from the Backend portal.
     const arr = (models ?? []).filter(
-      (m) => m.active || m.category === 'ACCESSORY' || m.category === 'SERVICE',
+      (m) => m.active || isSingleSkuCategory(m.category),
     );
     if (!q) return arr;
     return arr.filter(
@@ -870,20 +878,20 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
       arr.push(r);
       map.set(r.category, arr);
     }
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
+    return [...map.entries()].sort(([a], [b]) => compareProductCategories(a, b));
   }, [rows]);
 
   return (
     <>
       <div className={styles.headerRow}>
         <div className={styles.categoryChips}>
-          {(['all', 'SOFA', 'BEDFRAME', 'MATTRESS', 'ACCESSORY', 'SERVICE'] as const).map((c) => (
+          {[{ value: 'all', label: 'All' }, ...categoryChips].map((c) => (
             <CategoryChip
-              key={c}
-              active={filter === c}
-              onClick={() => setFilter(c as MfgCategory | 'all')}
+              key={c.value}
+              active={filter === c.value}
+              onClick={() => setFilter(c.value)}
             >
-              {c === 'all' ? 'All' : c.charAt(0) + c.slice(1).toLowerCase()}
+              {c.label}
             </CategoryChip>
           ))}
         </div>
@@ -925,7 +933,7 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
                 color: 'var(--c-ink)',
               }}
             >
-              <span className={styles.catPill} style={{ marginRight: 8 }}>{cat}</span>
+              <span className={styles.catPill} style={{ marginRight: 8 }}>{productCategoryLabel(cat)}</span>
               <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>
                 {list.length} {list.length === 1 ? 'model' : 'models'}
               </span>
@@ -1208,8 +1216,10 @@ const ModelAllowedOptionsDrawer = ({
   const isBedframe = m.category === 'BEDFRAME';
   const isMattress = m.category === 'MATTRESS';
   // Flat categories have no variants — they're sold straight at the SKU Master
-  // price, so the option pickers (sizes/compartments/etc.) don't apply.
-  const isFlatCategory = m.category === 'ACCESSORY' || m.category === 'SERVICE';
+  // price, so the option pickers (sizes/compartments/etc.) don't apply. Every
+  // category but sofa / bedframe / mattress, as in Houzs — a Sofa Accessory
+  // model used to fall through to the bedframe size pool here.
+  const isFlatCategory = isSingleSkuCategory(m.category);
 
   /* Master pool sources (drawn from MaintenanceConfig). For lists keyed as
      PricedOption[], we project just the .value field for the chip text. */
@@ -1296,7 +1306,7 @@ const ModelAllowedOptionsDrawer = ({
       {isFlatCategory ? (
         <>
           <p className={styles.eyebrow}>
-            No configurable options for {m.category.toLowerCase()} models — the price
+            No configurable options for {productCategoryLabel(m.category).toLowerCase()} models — the price
             is set in SKU Master and there are no variants to tick. Use the switch
             below to decide whether POS staff can sell it.
           </p>
@@ -1607,15 +1617,6 @@ const FabricAllowedSection = ({
    SKU Master tab
    ════════════════════════════════════════════════════════════════════════ */
 
-const CATEGORIES: { value: MfgCategory | 'all'; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'ACCESSORY', label: 'Accessory' },
-  { value: 'BEDFRAME', label: 'Bedframe' },
-  { value: 'SOFA', label: 'Sofa' },
-  { value: 'MATTRESS', label: 'Mattress' },
-  { value: 'SERVICE', label: 'Service' },
-];
-
 const fmtRm = (sen: number | null): string => {
   if (sen == null) return '—';
   return `RM ${(sen / 100).toLocaleString('en-MY', {
@@ -1651,6 +1652,13 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
     category: category === 'all' ? undefined : category,
     search: search.trim() || undefined,
   });
+  // Chips come off the unfiltered list (lib/products/product-categories.ts), so
+  // a search never hides one; it is the All view's own query, no extra request.
+  const { data: everyProduct } = useMfgProducts();
+  const categoryChips = useMemo(
+    () => [{ value: 'all', label: 'All' }, ...productCategoryChips((everyProduct ?? []).map((p) => p.category), category)],
+    [everyProduct, category],
+  );
   const config = useMaintenanceConfig('master');
 
   const allRows = useMemo(() => products ?? [], [products]);
@@ -1800,7 +1808,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
     <>
       <div className={styles.headerRow}>
         <div className={styles.categoryChips}>
-          {CATEGORIES.map((c) => (
+          {categoryChips.map((c) => (
             <CategoryChip
               key={c.value}
               active={category === c.value}
@@ -2234,7 +2242,7 @@ const ProductRow = ({
         </>
       ) : (
         <>
-          <td><span className={styles.catPill}>{row.category}</span></td>
+          <td><span className={styles.catPill}>{productCategoryLabel(row.category)}</span></td>
           <td>{row.size_label ?? '—'}</td>
           {/* "Price 2" column for bedframe/accessory/service — SELLING
               (sell_price_sen). base_price_sen is COST (0109 split); display
@@ -5031,7 +5039,7 @@ const FabricPricingPanel = () => {
               >
                 <option value="">Select a model…</option>
                 {allModels.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name} · {m.category}</option>
+                  <option key={m.id} value={m.id}>{m.name} · {productCategoryLabel(m.category)}</option>
                 ))}
               </select>
             </div>
@@ -5079,7 +5087,7 @@ const FabricPricingPanel = () => {
             {(overrides.data ?? []).map((r) => (
               <tr key={r.modelId} style={{ borderTop: '1px solid var(--line)' }}>
                 <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{r.modelName}</td>
-                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>{r.category ?? '—'}</td>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>{r.category ? productCategoryLabel(r.category) : '—'}</td>
                 <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{r.tier2Delta === null ? 'standard' : `+RM${r.tier2Delta}`}</td>
                 <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{r.tier3Delta === null ? 'standard' : `+RM${r.tier3Delta}`}</td>
                 {canEdit && (
