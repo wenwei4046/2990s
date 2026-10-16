@@ -557,9 +557,11 @@ modules the way the repo's bundle detection does (whole-piece 1S/2S/3S, 1B/2B as
 
 Houzs category `FABRIC_ACCESSORY`, shown as "Sofa Accessory" (their #3857). Owner
 2026-10-16: sold from the sofa **Custom build canvas only** (hidden from the standalone
-catalogue), as pieces that attach to the modules — back cushion (one a seat), back
-support (stacks behind a cushion on the same seat; SB01 "sand back"), extra arm (clips
-onto an armless end; AR01). Engine + reasons: `apps/pos/src/lib/sofa-accessories.ts`.
+catalogue), as pieces that attach to the modules — back cushion (**no limit**, owner
+2026-10-16: a module's usual places first, one a seat, then its back is shared out
+evenly), back support (stacks behind a cushion, one behind each; SB01 "sand back"),
+extra arm (clips onto an armless end; AR01). Engine + reasons:
+`apps/pos/src/lib/sofa-accessories.ts`.
 
 - 🔑 **Every piece is its OWN cart line and SO line** — its SKU, its exact
   `sell_price_sen` (never rounded — Houzs re-prices from the same field, 0.5% gate),
@@ -751,8 +753,12 @@ their `groupPrice` reads a cell's price by code from the Model SKU (`compRow`),
 and their order routes never call `findModule` (checked on origin/main
 `60e1631ec`). An unknown module only loses its adjacency, so each one is priced
 on its own — it would matter only if a combo spanned two of them. `fixedLength`
-(the length is the name at every seat depth) and the seat counts (7/6FT three,
-5/4FT two — an assumption until the owner confirms) live only in our copy.
+(the length is the name at every seat depth) and `bare` live only in our copy.
+**8210 is a BARE BASE** (owner 2026-10-16): no backrest and no arms — back cushions
+(any number), sand backs and arms are Sofa Accessories added on the canvas, and a
+base is a whole sofa with or without arms (`analyzeSofa`). Its dashed lines are a
+stitching design (`designLines`, about one every 36cm as the owner sketched it), not
+seats; its `cushions` is only how many back cushions sit at their usual width.
 
 ---
 
