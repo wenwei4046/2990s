@@ -250,4 +250,15 @@ describe('isolated mobile POS simulation', () => {
       expect(open).toMatchObject({ monthLabel: 'From 16 Sept 2026', monthEnd: null, showroomTotal: 2990, personalTotal: 2990, showroomCount: 1, personalCount: 1 });
     } finally { vi.useRealTimers(); }
   });
+
+  it('keeps a SKU off the shelf out of the catalogue until Show in POS puts it on, as Houzs does', async () => {
+    const codes = async () => ((await (await send('/pos-pools/mfg-catalog')).json()).products as Array<{ code: string }>).map((p) => p.code);
+    expect(await codes()).not.toContain('DEMO-TB');
+    // its own page still loads it
+    expect((await (await send('/pos-pools/mfg-catalog?id=mfg-demo-throw')).json()).products).toHaveLength(1);
+    expect((await send('/mfg-products/mfg-demo-throw', 'PATCH', { posActive: true })).status).toBe(200);
+    expect(await codes()).toContain('DEMO-TB');
+    const detail = await (await send('/product-models/demo-model-throw')).json();
+    expect(detail.skus[0].pos_active).toBe(true);
+  });
 });

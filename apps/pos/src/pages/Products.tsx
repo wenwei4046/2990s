@@ -94,6 +94,7 @@ import {
   useMfgProductSuppliers,
   useUploadSofaCompartmentPhoto,
   useDeleteSofaCompartmentPhoto,
+  useSetSkusOnPos,
   type MfgCategory,
   type MfgProductRow,
   type MaintenanceConfig,
@@ -117,6 +118,7 @@ import {
   useProductModel,
   useUpdateProductModel,
   type AllowedOptions,
+  type ProductModelRow,
 } from '../lib/products/product-models-queries';
 import { FabricsTable } from '../components/products/FabricsTable';
 import { groupFabricSeries } from '../lib/fabric-series-groups';
@@ -128,6 +130,7 @@ import { RuleTargetPicker, finalizeRuleTargets } from '../components/products/Ru
 import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
 import { compareProductCategories, isSingleSkuCategory, productCategoryChips, productCategoryLabel } from '../lib/products/product-categories';
+import { modelActiveAfter, modelShownInPos, skusToShelve } from '../lib/products/show-in-pos';
 import {
   DEFAULT_ARM_WIDTH_CM,
   NEEDED_KIND_LABEL,
@@ -869,6 +872,21 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
     }
     return map;
   }, [products]);
+  // Each Model's SKUs, for the "Hidden from POS" mark — on a single-SKU Model
+  // it reads the SKUs' shelf flag, as the drawer's switch does.
+  const skusByModelId = useMemo(() => {
+    const map = new Map<string, MfgProductRow[]>();
+    for (const p of products ?? []) {
+      if (!p.model_id) continue;
+      const arr = map.get(p.model_id) ?? [];
+      arr.push(p);
+      map.set(p.model_id, arr);
+    }
+    return map;
+  }, [products]);
+  const hiddenFromPos = (m: ProductModelRow): boolean => (isSingleSkuCategory(m.category)
+    ? !modelShownInPos(m.active, skusByModelId.get(m.id) ?? [])
+    : !m.active);
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -983,7 +1001,7 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
                     borderRadius: 'var(--radius-md)',
                     padding: 'var(--space-3)',
                     background: 'var(--c-cream)',
-                    opacity: m.active ? 1 : 0.6,
+                    opacity: hiddenFromPos(m) ? 0.6 : 1,
                     display: 'flex',
                     gap: 'var(--space-3)',
                     alignItems: 'flex-start',
@@ -1038,7 +1056,7 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
                     >
                       {m.name}
                     </div>
-                    {!m.active && (
+                    {hiddenFromPos(m) && (
                       <span style={{
                         display: 'inline-flex', alignItems: 'center', gap: 4,
                         marginTop: 3, padding: '1px 8px',
@@ -1141,6 +1159,7 @@ const ModelAllowedOptionsDrawer = ({
 }) => {
   const model = useProductModel(modelId);
   const updateModel = useUpdateProductModel();
+  const setSkusOnPos = useSetSkusOnPos();
   const masterCfg = useMaintenanceConfig('master');
   // Fabric pool for the FABRICS section (sofa + bedframe). Synced from the
   // Backend Fabric Converter (migration 0127): series = fabric_library, colours
@@ -1164,11 +1183,13 @@ const ModelAllowedOptionsDrawer = ({
   /* Draft of the allowed_options under edit. Initialised once when the row
      resolves; the chip toggles mutate this draft, Save writes it back. */
   const [draft, setDraft] = useState<AllowedOptions | null>(null);
-  // Model-level POS visibility (product_models.active). For flat categories
-  // (accessory/service) this on/off IS the whole drawer — there are no option
-  // pools to tick. Catalog card visibility is model-level via this flag
-  // (apps/api/.../product-models.ts PATCH). Initialised with the draft below.
-  const [activeDraft, setActiveDraft] = useState<boolean | null>(null);
+  // "Show in POS" for flat categories (accessory/service…), where this on/off
+  // IS the whole drawer — there are no option pools to tick. It is the Model's
+  // SKUs on the POS shelf (pos_active), so a new SKU, which Houzs creates off
+  // the shelf, reads Off until it is switched on (lib/products/show-in-pos.ts).
+  // Initialised with the draft below.
+  const [showDraft, setShowDraft] = useState<boolean | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   useEffect(() => {
     const mdl = model.data?.model;
     const mcfg = masterCfg.data?.data;
@@ -1204,7 +1225,7 @@ const ModelAllowedOptionsDrawer = ({
       });
     }
     setDraft(seeded);
-    setActiveDraft(mdl.active);
+    setShowDraft(modelShownInPos(mdl.active, model.data?.skus ?? []));
   }, [model.data, masterCfg.data, draft]);
 
   const m = model.data?.model;
@@ -1380,16 +1401,28 @@ const ModelAllowedOptionsDrawer = ({
     return next;
   });
 
-  const onSave = () => {
+  const onSave = async () => {
     if (!draft) return;
+    setSaveError(null);
     // Turning every leg off is now a valid config — an explicitly-saved empty
     // leg_heights means "offer no legs" (useSofaLegHeights treats a present-but-
     // empty list as "none", a key-absent list as "all"). Owner asked to allow
     // this and drop the earlier "all off" guard (2026-06-16).
-    updateModel.mutate(
-      { id: modelId, allowedOptions: draft, ...(activeDraft != null ? { active: activeDraft } : {}) },
-      { onSuccess: () => onClose() },
-    );
+    const skus = model.data?.skus ?? [];
+    const show = isFlatCategory ? showDraft : null;
+    const active = show == null ? m.active : modelActiveAfter(m.active, skus, show);
+    try {
+      await updateModel.mutateAsync({
+        id: modelId,
+        allowedOptions: draft,
+        ...(active !== m.active ? { active } : {}),
+      });
+      const skuIds = show == null ? [] : skusToShelve(skus, show);
+      if (show != null && skuIds.length > 0) await setSkusOnPos.mutateAsync({ skuIds, on: show });
+      onClose();
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   return (
@@ -1409,11 +1442,11 @@ const ModelAllowedOptionsDrawer = ({
           </p>
           <DrawerSwitch
             title="Show in POS"
-            detail={activeDraft
+            detail={showDraft
               ? 'On — sales staff can add this to an order.'
               : 'Off — hidden from the POS catalog.'}
-            on={!!activeDraft}
-            onToggle={() => setActiveDraft((v) => !v)}
+            on={!!showDraft}
+            onToggle={() => setShowDraft((v) => !v)}
             onIcon={<Eye size={14} strokeWidth={1.75} />}
             offIcon={<EyeOff size={14} strokeWidth={1.75} />}
           />
@@ -1533,10 +1566,15 @@ const ModelAllowedOptionsDrawer = ({
         <Button variant="ghost" size="md" onClick={onClose}>
           <span>Cancel</span>
         </Button>
-        <Button variant="primary" size="md" onClick={onSave} disabled={updateModel.isPending}>
-          <span>{updateModel.isPending ? 'Saving…' : 'Save'}</span>
+        <Button variant="primary" size="md" onClick={() => void onSave()} disabled={updateModel.isPending || setSkusOnPos.isPending}>
+          <span>{updateModel.isPending || setSkusOnPos.isPending ? 'Saving…' : 'Save'}</span>
         </Button>
       </div>
+      {saveError && (
+        <div style={{ color: 'var(--c-festive-b)', fontSize: 'var(--fs-13)', marginTop: 'var(--space-3)' }} role="alert">
+          Save failed — {saveError}
+        </div>
+      )}
     </DrawerShell>
   );
 };

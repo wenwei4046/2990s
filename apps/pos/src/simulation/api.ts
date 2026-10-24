@@ -16,15 +16,20 @@ import { marketingDispatch, resetMarketingSimulation, simulationPersona } from '
 export const SIMULATION_STORAGE_KEY = '2990:mobile-simulation:v1';
 type Row = Record<string, any>;
 type StoredOrder = { salesOrder: Row; items: Row[]; payments: Row[] };
-type Store = { version: 1; serial: number; cart: { lines: Row[]; sourceQuoteId: string | null }; orders: StoredOrder[]; quotes: Row[]; picks: Row[]; pwp: Row[]; slips: Record<string, Row>; redemptions: Row[]; idempotency: Record<string, { body: string; docNo: string }>; modelOptions?: Record<string, Row> };
+type Store = { version: 1; serial: number; cart: { lines: Row[]; sourceQuoteId: string | null }; orders: StoredOrder[]; quotes: Row[]; picks: Row[]; pwp: Row[]; slips: Record<string, Row>; redemptions: Row[]; idempotency: Record<string, { body: string; docNo: string }>; modelOptions?: Record<string, Row>; modelActive?: Record<string, boolean>; skuPosActive?: Record<string, boolean> };
 let memory: Store | undefined;
-// Modular saves (PATCH /product-models/:id) change a fixture Model's
-// allowed_options in place, so the catalogue's embedded Model reads them too.
+// Modular saves (PATCH /product-models/:id, and a SKU's posActive through PATCH
+// /mfg-products/:id) change a fixture Model's allowed_options and active, and a
+// fixture SKU's pos_active, in place, so the catalogue reads them too.
 const ORIGINAL_MODEL_OPTIONS = new Map(fixtures.models.map((m) => [m.id, JSON.stringify(m.allowed_options)]));
+const ORIGINAL_MODEL_ACTIVE = new Map(fixtures.models.map((m) => [m.id, m.active]));
+const ORIGINAL_POS_ACTIVE = new Map(fixtures.products.map((p) => [p.id, p.pos_active]));
 function applyModelOptions(store: Store) {
   for (const m of fixtures.models as Row[]) {
     m.allowed_options = store.modelOptions?.[m.id] ?? JSON.parse(ORIGINAL_MODEL_OPTIONS.get(m.id) ?? '{}');
+    m.active = store.modelActive?.[m.id] ?? ORIGINAL_MODEL_ACTIVE.get(m.id);
   }
+  for (const p of fixtures.products as Row[]) p.pos_active = store.skuPosActive?.[p.id] ?? ORIGINAL_POS_ACTIVE.get(p.id);
 }
 const audit: Array<{ method: string; path: string; status: number }> = [];
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -185,7 +190,11 @@ async function dispatch(path: string, params: URLSearchParams, method: string, b
   if (path === '/pos/verify-pin' || path === '/pos/set-pin' || path === '/pos/my-pin') return json({ ok: true, valid: true });
   if (path === '/categories') return json({ categories: fixtures.categories });
   if (path === '/products') return json({ products: [] }); // Actual mfg catalogue is authoritative.
-  if (path === '/pos-pools/mfg-catalog') return json({ products: catalogPhotos(filteredProducts(params)) });
+  // Like Houzs, only the paramless spine keeps to SKUs on the shelf.
+  if (path === '/pos-pools/mfg-catalog') {
+    const spine = !params.get('id') && !params.get('modelId') && !params.get('baseModel');
+    return json({ products: catalogPhotos(filteredProducts(params).filter((p) => !spine || p.pos_active !== false)) });
+  }
   if (path === '/mfg-products') return json({ products: filteredProducts(params) });
   if (path === '/product-models') return json({ models: fixtures.models.filter((m) => !params.get('category') || m.category === params.get('category')) });
   if (/^\/product-models\/[^/]+$/.test(path) && method === 'GET') {
@@ -197,10 +206,19 @@ async function dispatch(path: string, params: URLSearchParams, method: string, b
     if (!model) return failure('not_found', 'Demo model not found.', 404);
     if (body.allowedOptions && typeof body.allowedOptions === 'object') {
       store.modelOptions = { ...(store.modelOptions ?? {}), [model.id]: clone(body.allowedOptions) };
-      applyModelOptions(store);
-      save();
     }
+    if (typeof body.active === 'boolean') store.modelActive = { ...(store.modelActive ?? {}), [model.id]: body.active };
+    applyModelOptions(store);
+    save();
     return json({ model });
+  }
+  if (/^\/mfg-products\/[^/]+$/.test(path) && method === 'PATCH' && typeof body.posActive === 'boolean') {
+    const product = fixtures.products.find((p) => p.id === path.split('/')[2]);
+    if (!product) return failure('not_found', 'Demo SKU not found.', 404);
+    store.skuPosActive = { ...(store.skuPosActive ?? {}), [product.id]: body.posActive };
+    applyModelOptions(store);
+    save();
+    return json({ ok: true, changed: 1 });
   }
   if (/^\/mfg-products\/[^/]+\/price-history$/.test(path)) return json({ history: [] });
   if (path === '/fabric-library') return json({ fabrics: fixtures.fabrics });
