@@ -20,6 +20,12 @@
 // All three keys are ours: Houzs stores allowed_options as it is sent and its
 // own screens keep keys they do not know.
 //
+// NOT ON THE SOFA (owner 2026-10-24): an accessory Model can be switched off
+// "On the sofa" in Modular (allowed_options.on_sofa = false) — a square pillow
+// "purely belongs to accessory, can be bought separately". Such a piece is
+// never offered on a canvas: it is a card in the catalogue (under Accessories),
+// sold on its own line like any accessory, its fabric picked on its own page.
+//
 // ON THE ORDER every accessory is its own Sales Order line — its own SKU, its
 // own selling price, its own fabric colour (the sofa's unless the salesperson
 // picks another). It is never a cell of the sofa: Houzs splits a sofa build
@@ -36,6 +42,7 @@ import {
   cellEdges,
   edgeContacts,
   findModule,
+  fmtRM,
   isAccessoryModule,
   lCapEdgeOf,
   moduleFootprint,
@@ -125,6 +132,14 @@ export function readAccessoryPlacement(allowedOptions: unknown): SofaAccessoryPl
   if (!p || (p.role !== 'back' && p.role !== 'back-support' && p.role !== 'arm')) return null;
   const w = Number(p.armWidthCm);
   return Number.isFinite(w) && w > 0 ? { role: p.role, armWidthCm: Math.round(w) } : { role: p.role };
+}
+
+/** Whether an accessory Model goes on the sofa — allowed_options.on_sofa,
+ *  switched in Modular (owner 2026-10-24). false = not on the sofa: sold on its
+ *  own from the catalogue, never offered on a canvas. Absent = on the sofa,
+ *  which every accessory was until then. */
+export function readAccessoryOnSofa(allowedOptions: unknown): boolean {
+  return (allowedOptions as { on_sofa?: unknown } | null | undefined)?.on_sofa !== false;
 }
 
 /** allowed_options.sofa_accessories of a sofa Model — accessory Model ids. */
@@ -245,6 +260,12 @@ export function orderHave(needed: readonly NeededPiece[], orderPieces: ReadonlyM
 
 export const isPriced = (o: Pick<SofaAccessoryOption, 'priceSen'>): boolean =>
   o.priceSen != null && o.priceSen > 0;
+
+/** A piece's price as the canvas, the catalogue and its own page show it:
+ *  whole ringgit when it is, else to the sen — the line books the exact
+ *  sell_price_sen, and RM 39.50 shown as RM 40 would not be the price. */
+export const fmtAccessoryPrice = (sen: number): string =>
+  sen % 100 === 0 ? fmtRM(sen / 100) : `RM ${(sen / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /* ─── Geometry ──────────────────────────────────────────────────────── */
 

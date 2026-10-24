@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('./supabase', () => ({ supabase: { auth: { getSession: vi.fn() } } }));
 
 import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode, pickSoSkuName, describePosHandoffError, buildDeliveryFeeCartInputs, posHandoffIdempotencyKey, soProcessingDatePayload } from './pos-handover-so';
-import type { CartLine, CartConfig } from '../state/cart';
+import { sofaAccessoryConfig, type CartLine, type CartConfig } from '../state/cart';
 import type { CatalogProduct, SpecialDeliveryFeeRow } from './queries';
 
 const product = (over: Partial<CatalogProduct> = {}): CatalogProduct => ({
@@ -66,6 +66,23 @@ describe('cartLineToSoItem — Sofa Accessory', () => {
   it('keeps the colour open (KIV) when the sofa has only a series', () => {
     const item = cartLineToSoItem(accessory({ colourId: undefined, colourLabel: undefined, colourHex: undefined } as Partial<CartConfig>), new Map(), 'BC06');
     expect(item.variants).toEqual({ fabricId: 'CG', fabricLabel: 'CG' });
+  });
+
+  it('books a piece sold on its own the same way — its own qty, its fabric, the price to the sen', () => {
+    const line: CartLine = {
+      key: 'cfg-pillow',
+      qty: 3,
+      config: sofaAccessoryConfig({
+        modelId: 'm-sp', productId: 'mfg-sp', name: 'SOFA SQUARE PILLOW-M', unitPriceSen: 3950,
+        fabric: { fabricId: 'CG', colourId: 'CG-004', fabricLabel: 'CG', colourLabel: 'CG-004 Grey', colourHex: null },
+      }),
+    };
+    const item = cartLineToSoItem(line, new Map(), 'SQUARE PILLOW-M');
+    expect([item.itemGroup, item.qty, item.unitPriceCenti]).toEqual(['fabric_accessory', 3, 3950]);
+    expect(item.variants).toEqual({ fabricId: 'CG', fabricLabel: 'CG', colourId: 'CG-004', fabricCode: 'CG-004', colourLabel: 'CG-004 Grey' });
+    // fabric to confirm: no fabric keys at all, the Fabrics axis stays open
+    const unpicked = { ...line, config: sofaAccessoryConfig({ modelId: 'm-sp', productId: 'mfg-sp', name: 'SOFA SQUARE PILLOW-M', unitPriceSen: 3950, fabric: null }) };
+    expect(cartLineToSoItem(unpicked, new Map(), 'SQUARE PILLOW-M').variants).toBeNull();
   });
 });
 

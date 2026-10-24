@@ -42,6 +42,7 @@ import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-qui
 import { cellsFromComboModules } from '../lib/sofa-combo-cells';
 import {
   useCart,
+  sofaAccessoryConfig,
   type CartLine,
   type SofaConfigSnapshot,
   type SizeConfigSnapshot,
@@ -51,7 +52,15 @@ import {
 /* TBC sofa exchange (Loo 2026-06-12) — "Confirm Change" marshals the build
    exactly like the handover does and replaces the SO build server-side. */
 import { fetchItemCodeMap, cartLinesToSoItems } from '../lib/pos-handover-so';
-import { accessoriesStillNeeded, orderHave, orderPiecesByModel } from '../lib/sofa-accessories';
+import {
+  accessoriesStillNeeded,
+  fmtAccessoryPrice,
+  orderHave,
+  orderPiecesByModel,
+  readAccessoryOnSofa,
+  type AccessoryFabric,
+} from '../lib/sofa-accessories';
+import { productCategoryLabel } from '../lib/products/product-categories';
 import {
   useSoAccessoryPieces,
   useSoHeaderForAdd,
@@ -324,6 +333,18 @@ export const Configurator = () => {
   const bedframeFabricRows = useMemo<ProductFabricRow[]>(
     () => buildFabricSeriesRows(bedframeFabricCodes),
     [buildFabricSeriesRows, bedframeFabricCodes],
+  );
+  // A Sofa Accessory sold on its own is made in the fabric picked on its page.
+  // The same query reads its Model's ticks; a Model that ticks none — to Houzs
+  // no restriction — offers every active colour, as the My orders fill-in does
+  // (TbcLineEditor).
+  const accessoryColourIds = useMemo(
+    () => bedframeFabricCodes.length > 0 ? bedframeFabricCodes : (fabricColours.data ?? []).map((c) => c.colourId),
+    [bedframeFabricCodes, fabricColours.data],
+  );
+  const accessoryFabricRows = useMemo<ProductFabricRow[]>(
+    () => buildFabricSeriesRows(accessoryColourIds),
+    [buildFabricSeriesRows, accessoryColourIds],
   );
   useProductPricingRealtime(productId);
   /* PR — Commander 2026-05-28: Sofa Customize wires to Model.allowed_options.
@@ -1536,6 +1557,10 @@ export const Configurator = () => {
   // DIVAN ONLY base — collapses the configurator to size + colour + leg (no
   // mattress gap / divan height / total height / specials). Keyed off the SKU.
   const isDivan = p.sku === 'BED-DIVAN';
+  // A Sofa Accessory — sold here only when its Model is not on the sofa
+  // (lib/sofa-accessories.ts); one that goes on the sofa is added on a sofa's
+  // Custom build.
+  const isSofaAccessory = p.category_id === 'fabric_accessory';
 
   // Bedframe line total = picked size base + every selected surcharge (all 0
   // for pilot, but threaded so a future Backend price edit flows through).
@@ -2475,7 +2500,7 @@ export const Configurator = () => {
             onClick={backToCatalog}
           />
           <div className={styles.title}>
-            <span className="t-eyebrow">{p.category_id}</span>
+            <span className="t-eyebrow">{productCategoryLabel(p.category_id)}</span>
             <h1 className={styles.heading}>{p.name}</h1>
             {p.detail && <p className={styles.detail}>{p.detail}</p>}
             <code className={styles.sku}>{p.sku}</code>
@@ -2767,7 +2792,37 @@ export const Configurator = () => {
         </div>
       )}
 
-      {p.pricing_kind === 'flat' && p.flat_price != null && (
+      {isSofaAccessory && (readAccessoryOnSofa(p.model_allowed_options) ? (
+        <p className={styles.tbcCard}>
+          <Package size={16} strokeWidth={1.75} />
+          This piece goes on a sofa — add it on the sofa&apos;s Custom build.
+        </p>
+      ) : (
+        <>
+          {makeFreeRailSection}
+          <SofaAccessoryAddToCart
+            productId={p.id}
+            productName={p.name}
+            modelId={(p as { model_id?: string | null }).model_id ?? null}
+            priceSen={p.sell_price_sen}
+            fabricRows={accessoryFabricRows}
+            enabledColourIds={accessoryColourIds}
+            editing={isEditing && editingLine?.config.kind === 'flat' ? editingLine : undefined}
+            colourRequired={isAddToOrderMode && !!soHeader?.processingDate}
+            onDraftChange={markNestedDraftDirty}
+            onAdded={() => { savedNavigation.current = true; backToCatalog(); }}
+            {...(isAddToOrderMode ? {
+              onAddToOrder: (snapshot: FlatConfigSnapshot, qty: number) => {
+                void confirmAddToOrder(snapshot, qty);
+              },
+              addToOrderPending,
+              addEligible: soHeader?.addEligible ?? true,
+            } : {})}
+          />
+        </>
+      ))}
+
+      {p.pricing_kind === 'flat' && p.flat_price != null && !isSofaAccessory && (
         <>
           {/* Make free — addToOrder only (Task 8). Shown when a campaign covers
               this flat product and no PWP path is active. */}
@@ -3141,6 +3196,120 @@ const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded, o
       </div>
       <Button variant="primary" disabled={addToOrderPending || (onAddToOrder && !addEligible)} onClick={handleAdd}>
         {onAddToOrder ? (addToOrderPending ? 'Adding…' : 'Add to this order') : 'Add to cart'}
+      </Button>
+    </div>
+  );
+};
+
+interface SofaAccessoryAddToCartProps {
+  productId: string;
+  productName: string;
+  modelId: string | null;
+  /** Exact sell_price_sen. null / 0 = no selling price yet: it cannot be sold,
+   *  since Houzs books whatever the tablet sends for an unpriced SKU. */
+  priceSen: number | null;
+  /** The fabric series the picker offers, and the colours in them. */
+  fabricRows: ProductFabricRow[];
+  enabledColourIds: string[];
+  /** The cart line under edit (Edit in the cart). */
+  editing?: CartLine;
+  /** Adding to an order that already has a Processing Date: Houzs refuses a
+   *  line whose colour is still open, so it must be chosen now. */
+  colourRequired?: boolean;
+  onAdded: () => void;
+  onDraftChange?: () => void;
+  onAddToOrder?: (snapshot: FlatConfigSnapshot, qty: number) => void;
+  addToOrderPending?: boolean;
+  addEligible?: boolean;
+}
+
+/* A Sofa Accessory sold on its own — its Model is switched off "On the sofa"
+   (owner 2026-10-24, lib/sofa-accessories.ts). An accessory line like any
+   other, plus the fabric every Sofa Accessory line needs (the colour may be
+   KIV, filled in later from My orders) and the exact price. No fabric-tier
+   add-on: Houzs charges none on a Sofa Accessory. */
+const SofaAccessoryAddToCart = ({ productId, productName, modelId, priceSen, fabricRows, enabledColourIds, editing, colourRequired = false, onAdded, onDraftChange, onAddToOrder, addToOrderPending = false, addEligible = true }: SofaAccessoryAddToCartProps) => {
+  const addConfigured = useCart((s) => s.addConfigured);
+  const edited = editing?.config.kind === 'flat' ? editing.config : null;
+  const [qty, setQty] = useState(editing?.qty ?? 1);
+  const [fabric, setFabric] = useState<AccessoryFabric | null>(() => (edited?.fabricId ? {
+    fabricId: edited.fabricId,
+    colourId: edited.colourId ?? null,
+    fabricLabel: edited.fabricLabel ?? edited.fabricId,
+    colourLabel: edited.colourLabel ?? null,
+    colourHex: edited.colourHex ?? null,
+  } : null));
+  const priced = priceSen != null && priceSen > 0;
+  const colourMissing = colourRequired && !fabric?.colourId;
+  const handleAdd = () => {
+    if (!priced || colourMissing) return;
+    const snapshot = sofaAccessoryConfig({ modelId, productId, name: productName, unitPriceSen: priceSen, fabric });
+    if (onAddToOrder) { onAddToOrder(snapshot, qty); return; }
+    addConfigured(snapshot, { ...(editing ? { editingKey: editing.key } : {}), qty });
+    onAdded();
+  };
+  return (
+    <div className={styles.flatCard}>
+      <span className="t-eyebrow">Price</span>
+      {!priced ? (
+        <span>No selling price yet — it can be sold once one is set in Products › SKU Master.</span>
+      ) : priceSen % 100 === 0 ? (
+        <PriceTag amount={priceSen / 100} size="lg" />
+      ) : (
+        <span className={styles.accessoryPrice}>{fmtAccessoryPrice(priceSen)}</span>
+      )}
+      <div style={{ alignSelf: 'stretch' }}>
+        <FabricColourPicker
+          productFabrics={fabricRows}
+          fabricId={fabric?.fabricId ?? null}
+          colourId={fabric?.colourId ?? null}
+          onChange={(sel) => {
+            setFabric({ fabricId: sel.fabricId, colourId: sel.colourId, fabricLabel: sel.fabricLabel, colourLabel: sel.colourLabel, colourHex: sel.colourHex });
+            onDraftChange?.();
+          }}
+          enabledColourIds={enabledColourIds}
+          optional={!colourRequired}
+          onClear={() => { setFabric(null); onDraftChange?.(); }}
+        />
+      </div>
+      {colourRequired && (
+        <span style={{ fontSize: 'var(--fs-12)' }}>
+          This order already has a Processing Date, so the colour has to be chosen now.
+        </span>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', paddingTop: 'var(--space-2)' }}>
+        <span className={styles.stepper}>
+          <button
+            type="button"
+            className={styles.stepperBtn}
+            onClick={() => { setQty((q) => Math.max(1, q - 1)); onDraftChange?.(); }}
+            disabled={qty <= 1}
+            aria-label="Decrease quantity"
+          >
+            <Minus size={12} strokeWidth={2} />
+          </button>
+          <span className={styles.stepperVal}>{qty}</span>
+          <button
+            type="button"
+            className={styles.stepperBtn}
+            onClick={() => { setQty((q) => q + 1); onDraftChange?.(); }}
+            aria-label="Increase quantity"
+          >
+            <Plus size={12} strokeWidth={2} />
+          </button>
+        </span>
+        {qty > 1 && priced && (
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            {qty} × {fmtAccessoryPrice(priceSen)} = {fmtAccessoryPrice(qty * priceSen)}
+          </span>
+        )}
+      </div>
+      <Button
+        variant="primary"
+        disabled={!priced || colourMissing || addToOrderPending || (onAddToOrder && !addEligible)}
+        onClick={handleAdd}
+      >
+        {onAddToOrder ? (addToOrderPending ? 'Adding…' : 'Add to this order') : editing ? 'Save changes' : 'Add to cart'}
       </Button>
     </div>
   );

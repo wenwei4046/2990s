@@ -29,6 +29,9 @@ export const models = [
   // A bare base sold by overall length, like 8210 (7FT / 6FT / 5FT / 4FT):
   // no back and no arms of its own — cushions, sand backs and arms are added.
   { ...commonModel, id: 'demo-model-linea', name: 'LINEA', model_code: 'LINEA', category: 'SOFA', description: 'One base, chosen by length.', allowed_options: { compartments: lengthCodes, sizes: ['24', '28'], fabrics: fabricCodes.CG, leg_heights: ['6'], sofa_accessories: ['demo-model-back-cushion', 'demo-model-sand-back', 'demo-model-arm'] } },
+  // A Sofa Accessory switched off "On the sofa": sold on its own from the
+  // catalogue, in a colour picked on its page. Priced to the sen.
+  { ...commonModel, id: 'demo-model-square-pillow', name: 'Square pillow', model_code: 'DEMO-SP', category: 'FABRIC_ACCESSORY', description: 'Scatter pillow in a sofa fabric', allowed_options: { on_sofa: false } },
 ];
 const sku = (id: string, code: string, name: string, category: string, modelIndex: number, price: number, size: string | null = null, pwp: number | null = null) => ({
   id, code, name, category, model_id: models[modelIndex]!.id, base_model: models[modelIndex]!.model_code, description: models[modelIndex]!.description ?? 'Fictional demonstration product', branding: '2990', size_code: size, size_label: size === 'K' ? 'King · 183×190 cm' : size === 'Q' ? 'Queen · 152×190 cm' : null,
@@ -48,6 +51,7 @@ export const products = [
   sku('mfg-demo-sand-back', 'DEMO-SB', 'Sand back', 'FABRIC_ACCESSORY', 7, 16050),
   sku('mfg-demo-arm', 'DEMO-AR', 'Arm rest', 'FABRIC_ACCESSORY', 8, 8000),
   ...lengthCodes.map((code, i) => ({ ...sku(`mfg-demo-linea-${i}`, `LINEA-${code}`, `LINEA ${code}`, 'SOFA', 9, [329000, 299000, 259000, 229000][i]!), seat_height_prices: ['24', '28'].map((height) => ({ height, tier: 'PRICE_1', sellingPriceSen: [329000, 299000, 259000, 229000][i]! })) })),
+  sku('mfg-demo-square-pillow', 'DEMO-SP', 'Square pillow', 'FABRIC_ACCESSORY', 10, 3950),
 ];
 export const categories = [['sofa', 'Sofas', 'sofa'], ['mattress', 'Mattresses', 'bed-double'], ['bedframe', 'Bedframes', 'bed'], ['accessory', 'Accessories', 'package']].map(([id, label, icon], sortOrder) => ({ id, label, icon, tbc: false, sortOrder }));
 export const fabrics = [['CG', 'CG', 'PRICE_1'], ['EZ', 'EZ', 'PRICE_2'], ['BF', 'BF', 'PRICE_1']].map(([id, label, tier], sortOrder) => ({ id, label, tier: 'standard', defaultSurcharge: 0, active: true, sortOrder, sofaTier: tier, bedframeTier: tier }));

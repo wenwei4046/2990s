@@ -28,6 +28,7 @@ import { useHrAccess, useMaintainAccess, useMarketingAccess } from '../lib/houzs
 import { useMarketingState } from '../lib/marketing-api';
 import { authedFetchRaw, IS_HOUZS } from '../lib/apiClient';
 import { useCart, cartHasSofa, cartHasMainNonSofa, type FlatConfigSnapshot } from '../state/cart';
+import { fmtAccessoryPrice } from '../lib/sofa-accessories';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
 import { useMediaQuery } from '../hooks/useMediaQuery';
@@ -168,10 +169,11 @@ function groupByBranding(cards: CatalogCard[]): { branding: string; items: Catal
 function buildCards(rows: MfgCatalogRow[]): CatalogCard[] {
   const groups = new Map<string, CatalogCard>();
   for (const r of rows) {
-    // Sofa Accessories are sold from a sofa's Custom build only (owner
-    // 2026-10-16): on their own they would reach Houzs with no fabric colour,
-    // which every Sofa Accessory line needs. lib/sofa-accessories.ts.
-    if (String(r.category) === 'FABRIC_ACCESSORY') continue;
+    // A Sofa Accessory that goes on the sofa is sold from a sofa's Custom build
+    // only (owner 2026-10-16). One switched off "On the sofa" (owner 2026-10-24:
+    // a pillow is bought on its own) is a card like any accessory — its page
+    // asks for the fabric every Sofa Accessory line needs. lib/sofa-accessories.ts.
+    if (r.onSofa) continue;
     const key = r.modelId ?? r.id; // orphan SKUs (no model) get their own card
     const existing = groups.get(key);
     if (existing) {
@@ -725,6 +727,9 @@ const ProductCard = ({ p, blocked = false, addToOrder }: { p: CatalogCard; block
     : p.category === 'ACCESSORY' ? 0
     : null;
   const canDirectAdd = isFlat && p.variantCount === 1 && flatPrice != null;
+  // A Sofa Accessory sold on its own opens its page — the fabric is picked
+  // there — and shows its price to the sen, as it books.
+  const isSofaAccessory = p.category === 'FABRIC_ACCESSORY';
 
   const addFlatToCart = () => {
     const snapshot: FlatConfigSnapshot = {
@@ -762,9 +767,11 @@ const ProductCard = ({ p, blocked = false, addToOrder }: { p: CatalogCard; block
         <div className={styles.name}>{p.name}</div>
         {p.description && <div className={styles.detail}>{p.description}</div>}
         <div className={styles.heroPrice}>
-          {p.minPriceSen != null
-            ? `${p.category === 'SOFA' ? 'Modules from ' : p.variantCount > 1 ? 'From ' : ''}${fmtRM(p.minPriceSen / 100)}`
-            : 'Select a configuration to see price'}
+          {isSofaAccessory
+            ? (p.minPriceSen ? fmtAccessoryPrice(p.minPriceSen) : 'Price not set')
+            : p.minPriceSen != null
+              ? `${p.category === 'SOFA' ? 'Modules from ' : p.variantCount > 1 ? 'From ' : ''}${fmtRM(p.minPriceSen / 100)}`
+              : 'Select a configuration to see price'}
         </div>
         <div className={styles.priceRow}>
           <code className={styles.sku}>{p.leadSku}</code>
@@ -773,7 +780,7 @@ const ProductCard = ({ p, blocked = false, addToOrder }: { p: CatalogCard; block
               ? `${p.variantCount} variants`
               : canDirectAdd
                 ? `Add · ${fmtRM(flatPrice!)}`
-                : 'By size'}
+                : isSofaAccessory ? 'Choose fabric' : 'By size'}
           </span>
         </div>
       </div>

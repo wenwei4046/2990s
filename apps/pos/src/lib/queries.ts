@@ -6,6 +6,7 @@ import { useMaintenanceConfig, type MaintenanceResolved } from './products/mfg-p
 import {
   DEFAULT_ARM_WIDTH_CM,
   guessAccessoryRole,
+  readAccessoryOnSofa,
   readAccessoryPlacement,
   readSofaAccessoriesNeeded,
   readSofaAccessoryIds,
@@ -213,6 +214,14 @@ export const useProduct = (productId: string | undefined) =>
           mfg.sell_price_sen != null
             ? Math.round(mfg.sell_price_sen / 100)
             : mfg.category === 'ACCESSORY' ? 0 : null,
+        /* The exact selling price, unrounded — a Sofa Accessory sold on its own
+           books it to the sen (Houzs re-prices the line from this field and
+           refuses a 0.5% drift; RM 39.50 → 40 is 1.3%). lib/sofa-accessories.ts. */
+        sell_price_sen: mfg.sell_price_sen,
+        /* The Model's allowed_options — whether a Sofa Accessory goes on the sofa
+           (on_sofa) and the fabrics it ticks. */
+        model_allowed_options:
+          (Array.isArray(mfg.product_models) ? mfg.product_models[0] : mfg.product_models)?.allowed_options ?? null,
         recliner_upgrade_price: 0,
         seat_upgrade_label: null,
         seat_upgrade_footrest: true,
@@ -1014,7 +1023,7 @@ export const useCategoriesAll = () =>
  * POS-specific endpoint. If RLS gets added later, swap to a Worker route.
  * ───────────────────────────────────────────────────────────────────────── */
 
-export type MfgCatalogCategory = 'SOFA' | 'BEDFRAME' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE';
+export type MfgCatalogCategory = 'SOFA' | 'BEDFRAME' | 'MATTRESS' | 'ACCESSORY' | 'FABRIC_ACCESSORY' | 'SERVICE';
 
 export interface MfgCatalogRow {
   id:            string;
@@ -1025,6 +1034,10 @@ export interface MfgCatalogRow {
       Derived from `category` so the sidebar filter can match against the
       `categories` table without UI doing two enum mappings. */
   categoryId:    string;
+  /** A Sofa Accessory that goes on the sofa — its Model is not switched off
+   *  "On the sofa" (lib/sofa-accessories.ts) — so it is sold from a sofa's
+   *  Custom build only and the catalogue leaves it out. false for the rest. */
+  onSofa:        boolean;
   description:   string | null;
   /** From mfg_products.branding (denormalized from the Model in PR #65). */
   branding:      string | null;
@@ -1055,6 +1068,8 @@ const MFG_CATEGORY_ID: Record<MfgCatalogCategory, string> = {
   BEDFRAME:  'bedframe',
   MATTRESS:  'mattress',
   ACCESSORY: 'accessory',
+  // A Sofa Accessory sold on its own sits with the accessories (owner 2026-10-24).
+  FABRIC_ACCESSORY: 'accessory',
   SERVICE:   'accessory', // services aren't a catalog category — bucket under accessory tab
 };
 
@@ -1087,6 +1102,7 @@ export const useMfgCatalog = () =>
             name:         r.name,
             category:     r.category,
             categoryId:   MFG_CATEGORY_ID[r.category] ?? 'accessory',
+            onSofa:       r.category === 'FABRIC_ACCESSORY' && readAccessoryOnSofa(m?.allowed_options),
             description:  r.description,
             branding:     r.branding,
             sizeLabel:    r.size_label,
@@ -1322,14 +1338,16 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
       // Step 3: the Sofa Accessories ticked on this Model (owner 2026-10-16).
       // Each is a Model with one SKU; ?modelId reads it whatever its status, so
       // keep only what the catalogue would sell — an inactive SKU or Model is
-      // refused by Houzs as unknown_item_code.
+      // refused by Houzs as unknown_item_code. One switched off "On the sofa"
+      // (owner 2026-10-24) is sold on its own and never goes on a canvas, even
+      // while a sofa Model still ticks it.
       const accessoryRows = await Promise.all(
         readSofaAccessoryIds(model.allowed_options).map((id) => fetchMfgCatalog({ modelId: id }).catch(() => [])),
       );
       const accessories: SofaAccessoryOption[] = accessoryRows.flatMap((rows) => {
         const r = rows.find((x) => x.status === 'ACTIVE' && x.pos_active !== false && x.product_models?.active !== false);
         const accModel = r?.product_models;
-        if (!r || !accModel) return [];
+        if (!r || !accModel || !readAccessoryOnSofa(accModel.allowed_options)) return [];
         const placement = readAccessoryPlacement(accModel.allowed_options);
         return [{
           modelId:    accModel.id,
