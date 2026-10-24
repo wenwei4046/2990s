@@ -8,6 +8,7 @@ import {
   boundsWithArms,
   extraArmsOf,
   describeNeeded,
+  fmtAccessoryPrice,
   guessAccessoryRole,
   moveAccessory,
   nearestSlotFor,
@@ -16,6 +17,7 @@ import {
   orderHave,
   orderPiecesByModel,
   pruneAccessories,
+  readAccessoryOnSofa,
   readAccessoryPlacement,
   readSofaAccessoriesNeeded,
   readSofaAccessoryIds,
@@ -66,6 +68,21 @@ describe('reading the Model settings', () => {
     expect(readAccessoryPlacement(null)).toBeNull();
     expect(readSofaAccessoryIds({ sofa_accessories: ['m1', '', 3, 'm2'] })).toEqual(['m1', 'm2']);
     expect(readSofaAccessoryIds({})).toEqual([]);
+  });
+
+  it('a piece is on the sofa unless it is switched off', () => {
+    expect(readAccessoryOnSofa({ on_sofa: false, placement: { role: 'back' } })).toBe(false);
+    expect(readAccessoryOnSofa({ on_sofa: true })).toBe(true);
+    // every accessory saved before the switch existed
+    expect(readAccessoryOnSofa({ placement: { role: 'arm' } })).toBe(true);
+    expect(readAccessoryOnSofa(null)).toBe(true);
+    expect(readAccessoryOnSofa({ on_sofa: 'no' })).toBe(true);
+  });
+
+  it('shows a price to the sen only when it has sen', () => {
+    expect(fmtAccessoryPrice(13500)).toBe('RM 135');
+    expect(fmtAccessoryPrice(3950)).toBe('RM 39.50');
+    expect(fmtAccessoryPrice(123456)).toBe('RM 1,234.56');
   });
 
   it('offers a kind for each kind of piece the sofa offers, in a fixed order', () => {

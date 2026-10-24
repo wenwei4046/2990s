@@ -556,11 +556,12 @@ modules the way the repo's bundle detection does (whole-piece 1S/2S/3S, 1B/2B as
 ## Sofa Accessories — pieces on the Custom build (2026-10-16)
 
 Houzs category `FABRIC_ACCESSORY`, shown as "Sofa Accessory" (their #3857). Owner
-2026-10-16: sold from the sofa **Custom build canvas only** (hidden from the standalone
+2026-10-16: sold from the sofa **Custom build canvas** (hidden from the standalone
 catalogue), as pieces that attach to the modules — back cushion (**no limit**, owner
 2026-10-16: a module's usual places first, one a seat, then its back is shared out
 evenly), back support (stacks behind a cushion, one behind each; SB01 "sand back"),
-extra arm (clips onto an armless end; AR01). Engine + reasons:
+extra arm (clips onto an armless end; AR01). One switched off "On the sofa" is sold
+on its own instead (2026-10-24, last bullets). Engine + reasons:
 `apps/pos/src/lib/sofa-accessories.ts`.
 
 - 🔑 **Every piece is its OWN cart line and SO line** — its SKU, its exact
@@ -596,6 +597,26 @@ extra arm (clips onto an armless end; AR01). Engine + reasons:
   nothing on the SO links them to the sofa, and Houzs's `tbc-update` copies a sofa's
   confirmed colour to the sofa's own lines only. A piece left KIV blocks the Processing
   Date.
+- 🔑 **"On the sofa" off = sold on its own** (owner 2026-10-24: a square pillow "purely
+  belongs to accessory, can be bought separately"). Modular › the accessory › **On the
+  sofa** switch, stored as `allowed_options.on_sofa = false` (absent = on, as every
+  accessory was). Such a piece is never offered on a canvas — even while a sofa Model
+  still ticks it (listed there as "(not on the sofa)" so it can be unticked; it gives
+  no Needed-to-order kind). It is a catalogue card under Accessories (`onSofa` on
+  `MfgCatalogRow`) that opens its own page (`SofaAccessoryAddToCart` in
+  `Configurator.tsx`): fabric + colour (Confirm later / KIV allowed, but required when
+  adding to an order that already has a Processing Date — Houzs refuses an open colour
+  there), qty, the exact `sell_price_sen` shown to the sen. In the cart it is an
+  ordinary flat line (no `accessoryOfKey`; Edit reopens its page); on the SO, the same
+  `fabric_accessory` line as a piece on a sofa. Its Modular drawer adds a **Fabrics**
+  list — the colours it comes in; none ticked = every colour (to Houzs an empty list is
+  no restriction). Switching it back on the sofa drops that list: Houzs checks a line's
+  colour against its Model's list, and a piece on a sofa is made in the sofa's colours.
+- **An item with no colour is not a Sofa Accessory** (owner 2026-10-24). Houzs wants a
+  colour on every `fabric_accessory` line before a Processing Date or a PO (its
+  so-variant-rule has no per-SKU exemption, and it stores the SKU's own category as
+  `item_group` whatever the POS sends), so such an item goes in **Accessory** in the SKU
+  Master — tap-to-add, nothing to pick.
 
 ## Sofa combos — the POS's own table inside Houzs (since 2026-09-26)
 

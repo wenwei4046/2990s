@@ -52,6 +52,7 @@ import {
   accessoryRects,
   boundsWithArms,
   extraArmsOf,
+  fmtAccessoryPrice,
   isPriced,
   moveAccessory,
   nearestSlotFor,
@@ -348,11 +349,6 @@ interface CustomBuilderProps {
    *  (orderPiecesByModel). */
   orderPieces?: ReadonlyMap<string, number> | null;
 }
-
-/** An accessory's price for the palette: whole ringgit like the modules, with
- *  sen only when the price has them. */
-const fmtAccessoryPrice = (sen: number): string =>
-  sen % 100 === 0 ? fmtRM(sen / 100) : `RM ${(sen / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
 // persistence layer (where cells may be hydrated with ids generated in an

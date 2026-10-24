@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router';
 import { Trash2, BookmarkPlus, Check, Pencil, Plus, Gift, Undo2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, campaignsCoveringLine } from '@2990s/shared';
-import { useCart, accessoryOfKey, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
+import { useCart, accessoryOfKey, cartSubtotal, cartSummary, isStandaloneAccessory, type CartLine } from '../state/cart';
 import { cartLineTitle, useMfgCatalogIndex } from '../lib/cart-display';
 import { useSaveQuote } from '../lib/quotes';
 import { useFreePwpCodes } from '../lib/products/pwp-queries';
@@ -106,7 +106,9 @@ export const CartContents = ({ variant, onContinue }: Props) => {
             onRemove={remove}
             onSetQty={setQty}
             onEdit={
-              variant === 'page' && l.config.kind !== 'flat'
+              // A Sofa Accessory sold on its own has a page of its own (its
+              // fabric); other flat lines have nothing to change but the qty.
+              variant === 'page' && (l.config.kind !== 'flat' || isStandaloneAccessory(l.config))
                 ? () => navigate(`/configure/${l.config.productId}?edit=${l.key}`)
                 : undefined
             }

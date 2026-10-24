@@ -4,6 +4,8 @@ import {
   cartHasSofa,
   cartHasNonSofa,
   cartHasMainNonSofa,
+  isStandaloneAccessory,
+  sofaAccessoryConfig,
   useCart,
   type CartLine,
   type CartConfig,
@@ -385,5 +387,44 @@ describe('Sofa Accessory lines follow their sofa', () => {
     expect(acc().qty).toBe(6);
     useCart.getState().makeFree(acc().key, { id: 'c', name: 'C', maxFreeQty: 9 });
     expect((acc().config as FlatConfigSnapshot).freeItemCampaignId).toBeUndefined();
+  });
+});
+
+describe('a Sofa Accessory sold on its own', () => {
+  beforeEach(() => { useCart.getState().clear(); });
+
+  const pillow = (fabric: Parameters<typeof sofaAccessoryConfig>[0]['fabric']) => sofaAccessoryConfig({
+    modelId: 'm-sp', productId: 'mfg-sp', name: 'SOFA SQUARE PILLOW-M', unitPriceSen: 3950, fabric,
+  });
+  const sand = { fabricId: 'CG', colourId: 'CG-002', fabricLabel: 'CG', colourLabel: 'CG-002 Sand', colourHex: '#c5b9a8' };
+
+  it('carries its fabric and the exact price, with no sofa to follow', () => {
+    const c = pillow(sand);
+    expect([c.kind, c.category, c.modelId, c.fabricId, c.colourId, c.total, c.accessoryOfKey])
+      .toEqual(['flat', 'FABRIC_ACCESSORY', 'm-sp', 'CG', 'CG-002', 39.5, undefined]);
+    expect(c.summary).toBe('Sofa accessory · CG / CG-002 Sand');
+    expect(pillow({ ...sand, colourId: null, colourLabel: null }).summary).toBe('Sofa accessory · CG / Colour KIV');
+    expect(pillow(null).summary).toBe('Sofa accessory · Fabric to confirm');
+  });
+
+  it('is told apart from a piece on a sofa', () => {
+    expect(isStandaloneAccessory(pillow(sand))).toBe(true);
+    expect(isStandaloneAccessory({ ...pillow(sand), accessoryOfKey: 'cfg-sofa' })).toBe(false);
+    expect(isStandaloneAccessory({ kind: 'flat', productId: 'p', productName: 'P', category: 'ACCESSORY', total: 99, summary: '' })).toBe(false);
+  });
+
+  it('is an ordinary line: its qty and removal are the salesperson’s', () => {
+    const key = useCart.getState().addConfigured(pillow(sand), { qty: 2 });
+    useCart.getState().setQty(key, 4);
+    expect(useCart.getState().lines[0]!.qty).toBe(4);
+    useCart.getState().addConfigured(pillow({ ...sand, colourId: 'CG-003' }), { editingKey: key, qty: 1 });
+    expect([useCart.getState().lines[0]!.qty, (useCart.getState().lines[0]!.config as FlatConfigSnapshot).colourId]).toEqual([1, 'CG-003']);
+    useCart.getState().remove(key);
+    expect(useCart.getState().lines).toEqual([]);
+  });
+
+  it('shares an order with a sofa or a mattress, like any accessory', () => {
+    expect(cartCategoryConflict([line('sofa')], pillow(sand))).toBeNull();
+    expect(cartCategoryConflict([line('size')], pillow(sand))).toBeNull();
   });
 });

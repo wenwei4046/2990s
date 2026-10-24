@@ -15,7 +15,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { campaignsCoveringLine } from '@2990s/shared';
-import { useCart, cartItemCount, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
+import { useCart, cartItemCount, cartSubtotal, cartSummary, isStandaloneAccessory, type CartLine } from '../state/cart';
 import { useCatalog, useActiveFreeItemCampaigns, useSofaCombos, sizeIdToMfgCode, type CatalogProduct, type MfgCatalogRow, type FreeItemCampaignRow } from '../lib/queries';
 import { cartLineTitle, useMfgCatalogIndex } from '../lib/cart-display';
 import { useSaveQuote, useUpdateQuote } from '../lib/quotes';
@@ -219,7 +219,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
                 onDec={() => setQty(line.key, line.qty - 1)}
                 onInc={() => setQty(line.key, line.qty + 1)}
                 onEdit={
-                  line.config.kind !== 'flat'
+                  line.config.kind !== 'flat' || isStandaloneAccessory(line.config)
                     ? () => { onClose(); navigate(`/configure/${line.config.productId}?edit=${line.key}`); }
                     : undefined
                 }

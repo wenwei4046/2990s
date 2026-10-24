@@ -155,8 +155,10 @@ export interface FlatConfigSnapshot {
   /** Sofa Accessory (owner 2026-10-16, lib/sofa-accessories.ts): pieces placed
    *  on the sofa line `accessoryOfKey`. The line follows that sofa — qty =
    *  accessoryPerSofa × the sofa's qty, removed with it, changed only by
-   *  editing the sofa — and carries the fabric its SO line needs (Houzs wants a
-   *  colour on every Sofa Accessory). `total` is the exact selling price. */
+   *  editing the sofa. A piece sold on its own (its Model is not on the sofa,
+   *  owner 2026-10-24) has no accessoryOfKey and is an ordinary flat line. Both
+   *  carry the fabric their SO line needs (Houzs wants a colour on every Sofa
+   *  Accessory); `total` is the exact selling price. */
   accessoryOfKey?: string;
   accessoryPerSofa?: number;
   modelId?: string | null;
@@ -324,38 +326,52 @@ const isFreeItemLine = (c: CartConfig): boolean =>
 export const accessoryOfKey = (c: CartConfig): string | undefined =>
   c.kind === 'flat' ? c.accessoryOfKey : undefined;
 
+/** A Sofa Accessory sold on its own — not on a sofa line (its Model is not on
+ *  the sofa, lib/sofa-accessories.ts). An ordinary flat line otherwise. */
+export const isStandaloneAccessory = (c: CartConfig): boolean =>
+  c.kind === 'flat' && c.category === 'FABRIC_ACCESSORY' && !c.accessoryOfKey;
+
 const accessoryLineKey = (sofaKey: string, a: AccessoryLine): string =>
   `${sofaKey}~${a.modelId}~${a.fabric?.fabricId ?? ''}~${a.fabric?.colourId ?? ''}`;
 
-/** The cart line for one accessory × fabric on a sofa. */
-export const sofaAccessoryLine = (sofaKey: string, sofaQty: number, a: AccessoryLine): CartLine => {
+/** The snapshot of one Sofa Accessory × fabric, on a sofa or sold on its own:
+ *  its SKU, the fabric its SO line needs and its exact selling price. A piece
+ *  sold on its own is just this — qty and removal are the salesperson's. */
+export const sofaAccessoryConfig = (a: {
+  modelId: string | null;
+  productId: string;
+  name: string;
+  unitPriceSen: number;
+  fabric: AccessoryLine['fabric'];
+}): FlatConfigSnapshot => {
   const fabric = a.fabric
     ? `${a.fabric.fabricLabel} / ${a.fabric.colourLabel ?? 'Colour KIV'}`
     : 'Fabric to confirm';
   return {
-    key: accessoryLineKey(sofaKey, a),
-    qty: a.qtyPerSofa * Math.max(1, sofaQty),
-    config: {
-      kind: 'flat',
-      productId: a.productId,
-      productName: a.name,
-      category: 'FABRIC_ACCESSORY',
-      modelId: a.modelId,
-      accessoryOfKey: sofaKey,
-      accessoryPerSofa: a.qtyPerSofa,
-      ...(a.fabric ? {
-        fabricId: a.fabric.fabricId,
-        fabricLabel: a.fabric.fabricLabel,
-        ...(a.fabric.colourId ? { colourId: a.fabric.colourId } : {}),
-        ...(a.fabric.colourLabel ? { colourLabel: a.fabric.colourLabel } : {}),
-        ...(a.fabric.colourHex ? { colourHex: a.fabric.colourHex } : {}),
-      } : {}),
-      // Exact sen → ringgit; the handover multiplies back without rounding loss.
-      total: a.unitPriceSen / 100,
-      summary: `Sofa accessory · ${fabric}`,
-    },
+    kind: 'flat',
+    productId: a.productId,
+    productName: a.name,
+    category: 'FABRIC_ACCESSORY',
+    modelId: a.modelId,
+    ...(a.fabric ? {
+      fabricId: a.fabric.fabricId,
+      fabricLabel: a.fabric.fabricLabel,
+      ...(a.fabric.colourId ? { colourId: a.fabric.colourId } : {}),
+      ...(a.fabric.colourLabel ? { colourLabel: a.fabric.colourLabel } : {}),
+      ...(a.fabric.colourHex ? { colourHex: a.fabric.colourHex } : {}),
+    } : {}),
+    // Exact sen → ringgit; the handover multiplies back without rounding loss.
+    total: a.unitPriceSen / 100,
+    summary: `Sofa accessory · ${fabric}`,
   };
 };
+
+/** The cart line for one accessory × fabric on a sofa. */
+export const sofaAccessoryLine = (sofaKey: string, sofaQty: number, a: AccessoryLine): CartLine => ({
+  key: accessoryLineKey(sofaKey, a),
+  qty: a.qtyPerSofa * Math.max(1, sofaQty),
+  config: { ...sofaAccessoryConfig(a), accessoryOfKey: sofaKey, accessoryPerSofa: a.qtyPerSofa },
+});
 
 const sanitizeQty = (config: CartConfig, qty: number | undefined, fallback = 1): number =>
   isPwpReward(config) ? 1 : Math.max(1, Math.floor(qty ?? fallback));

@@ -64,6 +64,7 @@ import {
   Eye,
   EyeOff,
   ArrowLeft,
+  Sofa,
 } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button, IconButton } from '@2990s/design-system';
@@ -134,6 +135,7 @@ import {
   describeNeeded,
   guessAccessoryRole,
   neededKindsOf,
+  readAccessoryOnSofa,
   readAccessoryPlacement,
   readSofaAccessoriesNeeded,
   readSofaAccessoryIds,
@@ -1270,21 +1272,29 @@ const ModelAllowedOptionsDrawer = ({
     .map((a) => a.code);
   // Sofa Accessories (owner 2026-10-16): ticked ones show in this Model's
   // Custom build palette. Stored by accessory MODEL id — a code rename in Houzs
-  // re-points item codes, never ids. An accessory switched off stays listed
-  // while still ticked here, so it can be unticked.
+  // re-points item codes, never ids. One switched off "On the sofa" (owner
+  // 2026-10-24) is sold on its own and never goes on a canvas, so it is not
+  // offered here. Either kind of switched-off accessory stays listed while
+  // still ticked here, so it can be unticked.
   const tickedAccessories = new Set(isSofa ? readSofaAccessoryIds(draft) : []);
   const sofaAccessoryPool = isSofa
     ? (accessoryModels.data ?? [])
-      .filter((a) => a.active || tickedAccessories.has(a.id))
-      .map((a) => ({ id: a.id, label: a.active ? a.name : `${a.name} (off)` }))
+      .map((a) => ({ a, onSofa: readAccessoryOnSofa(a.allowed_options) }))
+      .filter(({ a, onSofa }) => (a.active && onSofa) || tickedAccessories.has(a.id))
+      .map(({ a, onSofa }) => ({
+        id: a.id,
+        onSofa,
+        label: !a.active ? `${a.name} (off)` : !onSofa ? `${a.name} (not on the sofa)` : a.name,
+      }))
     : [];
   // Needed to order goes by kind — arm rest, back cushion, back support (owner
   // 2026-10-16: "by category, not by its SKU") — read off the accessories
   // ticked above and kept in step with them ("supposed to be synchronized"): a
   // kind shows while a piece of it is ticked there, and unticking its last
-  // piece drops it here too.
+  // piece drops it here too. A piece not on the sofa is offered by no canvas,
+  // so it gives no kind.
   const offeredFrom = (ids: readonly string[]) => sofaAccessoryPool
-    .filter((a) => ids.includes(a.id))
+    .filter((a) => a.onSofa && ids.includes(a.id))
     .map((a) => {
       const row = (accessoryModels.data ?? []).find((x) => x.id === a.id);
       const role: SofaAccessoryRole = row
@@ -1355,6 +1365,20 @@ const ModelAllowedOptionsDrawer = ({
       return next;
     });
   };
+  // A Sofa Accessory's "On the sofa" (owner 2026-10-24). Stored only when off —
+  // absent = on the sofa, as every accessory was. Back on the sofa, its own
+  // colour list goes with it: a piece on a sofa is made in the sofa's colours,
+  // and Houzs refuses a line whose colour is outside its Model's list.
+  const setAccessoryOnSofa = (on: boolean) => setDraft((prev) => {
+    const next: AllowedOptions = JSON.parse(JSON.stringify(prev ?? {}));
+    if (on) {
+      delete next.on_sofa;
+      delete next.fabrics;
+    } else {
+      next.on_sofa = false;
+    }
+    return next;
+  });
 
   const onSave = () => {
     if (!draft) return;
@@ -1383,48 +1407,42 @@ const ModelAllowedOptionsDrawer = ({
             is set in SKU Master and there are no variants to tick. Use the switch
             below to decide whether POS staff can sell it.
           </p>
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            gap: 'var(--space-3)', marginTop: 'var(--space-4)', padding: 'var(--space-3)',
-            border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md, 10px)',
-            background: 'var(--c-paper)',
-          }}>
-            <div>
-              <div style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--c-ink)' }}>
-                Show in POS
-              </div>
-              <div className={styles.eyebrow} style={{ marginTop: 2 }}>
-                {activeDraft
-                  ? 'On — sales staff can add this to an order.'
-                  : 'Off — hidden from the POS catalog.'}
-              </div>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={!!activeDraft}
-              aria-label="Show in POS"
-              onClick={() => setActiveDraft((v) => !v)}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                padding: '8px 16px', borderRadius: 'var(--radius-pill, 999px)',
-                border: '1px solid var(--line-strong)', cursor: 'pointer',
-                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
-                background: activeDraft ? 'var(--c-ink)' : 'transparent',
-                color: activeDraft ? 'var(--c-paper)' : 'var(--c-ink)',
-              }}
-            >
-              {activeDraft
-                ? <Eye size={14} strokeWidth={1.75} />
-                : <EyeOff size={14} strokeWidth={1.75} />}
-              {activeDraft ? 'On' : 'Off'}
-            </button>
-          </div>
+          <DrawerSwitch
+            title="Show in POS"
+            detail={activeDraft
+              ? 'On — sales staff can add this to an order.'
+              : 'Off — hidden from the POS catalog.'}
+            on={!!activeDraft}
+            onToggle={() => setActiveDraft((v) => !v)}
+            onIcon={<Eye size={14} strokeWidth={1.75} />}
+            offIcon={<EyeOff size={14} strokeWidth={1.75} />}
+          />
           {m.category === 'FABRIC_ACCESSORY' && (
             <AccessoryPlacementSection
+              onSofa={readAccessoryOnSofa(d)}
+              onOnSofaChange={setAccessoryOnSofa}
               placement={readAccessoryPlacement(d) ?? { role: guessAccessoryRole(m.name, m.model_code) }}
               onChange={(placement) => setDraft((prev) => ({ ...(prev ?? {}), placement }))}
             />
+          )}
+          {/* Sold on its own, it is made in a colour picked on its page: tick
+              the ones it comes in. None ticked — to Houzs no restriction — and
+              every colour can be picked. */}
+          {m.category === 'FABRIC_ACCESSORY' && !readAccessoryOnSofa(d) && (
+            <div style={{ marginTop: 'var(--space-5)' }}>
+              <FabricAllowedSection
+                series={fabricGroups.series}
+                coloursBySeries={fabricGroups.coloursBySeries}
+                isTicked={(code) => isTicked('fabrics', code)}
+                onToggle={(code) => toggle('fabrics', code)}
+                onSetAll={setFabricsBulk}
+              />
+              <p className={styles.eyebrow} style={{ marginTop: 'calc(-1 * var(--space-2))' }}>
+                {(d.fabrics ?? []).length === 0
+                  ? 'None ticked — every colour can be picked.'
+                  : 'Only the ticked colours can be picked.'}
+              </p>
+            </div>
           )}
         </>
       ) : (
@@ -1636,9 +1654,60 @@ const AllowedOptionsSection = ({
   </div>
 );
 
+/** An on/off row in the Model drawer — "Show in POS", "On the sofa". */
+const DrawerSwitch = ({
+  title,
+  detail,
+  on,
+  onToggle,
+  onIcon,
+  offIcon,
+}: {
+  title: string;
+  detail: string;
+  on: boolean;
+  onToggle: () => void;
+  onIcon: ReactNode;
+  offIcon: ReactNode;
+}) => (
+  <div style={{
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: 'var(--space-3)', marginTop: 'var(--space-4)', padding: 'var(--space-3)',
+    border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md, 10px)',
+    background: 'var(--c-paper)',
+  }}>
+    <div>
+      <div style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--c-ink)' }}>
+        {title}
+      </div>
+      <div className={styles.eyebrow} style={{ marginTop: 2 }}>{detail}</div>
+    </div>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={title}
+      onClick={onToggle}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        padding: '8px 16px', borderRadius: 'var(--radius-pill, 999px)',
+        border: '1px solid var(--line-strong)', cursor: 'pointer',
+        fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+        background: on ? 'var(--c-ink)' : 'transparent',
+        color: on ? 'var(--c-paper)' : 'var(--c-ink)',
+      }}
+    >
+      {on ? onIcon : offIcon}
+      {on ? 'On' : 'Off'}
+    </button>
+  </div>
+);
+
 /* Where a Sofa Accessory goes on the canvas (owner 2026-10-16) — stored as
    allowed_options.placement on the accessory's Model, read by the Custom build
-   (lib/sofa-accessories.ts). Until set, the role is read off the name. */
+   (lib/sofa-accessories.ts). Until set, the role is read off the name. Or it
+   is not on the sofa at all (owner 2026-10-24, allowed_options.on_sofa): a
+   pillow bought on its own, from the catalogue. */
 const PLACEMENT_HINT: Record<SofaAccessoryRole, string> = {
   back: 'Goes along the back of the sofa, against the backrest — as many as the customer wants.',
   'back-support': 'Goes behind a back cushion, so it needs one first. One behind each cushion.',
@@ -1646,70 +1715,93 @@ const PLACEMENT_HINT: Record<SofaAccessoryRole, string> = {
 };
 
 const AccessoryPlacementSection = ({
+  onSofa,
+  onOnSofaChange,
   placement,
   onChange,
 }: {
+  onSofa: boolean;
+  onOnSofaChange: (on: boolean) => void;
   placement: SofaAccessoryPlacement;
   onChange: (next: SofaAccessoryPlacement) => void;
 }) => {
   const armWidth = placement.armWidthCm ?? DEFAULT_ARM_WIDTH_CM;
   return (
-    <div style={{ marginTop: 'var(--space-5)' }}>
-      <div style={{
-        fontFamily: 'var(--font-button)',
-        fontSize: 'var(--fs-12)',
-        fontWeight: 600,
-        letterSpacing: '0.08em',
-        textTransform: 'uppercase',
-        color: 'var(--fg-muted)',
-        marginBottom: 'var(--space-2)',
-      }}>On the sofa</div>
-      <div role="radiogroup" aria-label="On the sofa" style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-        {(['back', 'back-support', 'arm'] as const).map((role) => {
-          const on = placement.role === role;
-          return (
-            <button
-              key={role}
-              type="button"
-              role="radio"
-              aria-checked={on}
-              onClick={() => onChange(role === 'arm' ? { role, armWidthCm: armWidth } : { role })}
-              style={{
-                padding: '4px 12px',
-                borderRadius: 999,
-                border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line)'}`,
-                background: on ? 'var(--c-orange)' : 'var(--c-cream)',
-                color: on ? 'var(--c-paper)' : 'var(--c-ink)',
-                fontFamily: 'var(--font-sans)',
-                fontSize: 'var(--fs-13)',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              {SOFA_ACCESSORY_ROLE_LABEL[role]}
-            </button>
-          );
-        })}
-      </div>
-      <p className={styles.eyebrow} style={{ marginTop: 'var(--space-2)' }}>{PLACEMENT_HINT[placement.role]}</p>
-      {placement.role === 'arm' && (
-        <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginTop: 'var(--space-2)', fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', color: 'var(--c-ink)' }}>
-          Arm width (cm)
-          <input
-            type="number"
-            min={5}
-            max={60}
-            step={1}
-            value={armWidth}
-            onChange={(e) => {
-              const v = Math.round(Number(e.target.value));
-              if (Number.isFinite(v) && v > 0) onChange({ role: 'arm', armWidthCm: v });
-            }}
-            style={{ width: 72, padding: '6px 8px', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)', fontSize: 'var(--fs-13)' }}
-          />
-        </label>
+    <>
+      <DrawerSwitch
+        title="On the sofa"
+        detail={onSofa
+          ? 'On — added on a sofa’s Custom build.'
+          : 'Off — sold on its own, like any accessory.'}
+        on={onSofa}
+        onToggle={() => onOnSofaChange(!onSofa)}
+        onIcon={<Sofa size={14} strokeWidth={1.75} />}
+        offIcon={<Package size={14} strokeWidth={1.75} />}
+      />
+      {!onSofa ? (
+        <p className={styles.eyebrow} style={{ marginTop: 'var(--space-2)' }}>
+          It shows in the catalogue under Accessories, where the salesperson picks
+          its colour. No sofa offers it on its Custom build.
+        </p>
+      ) : (
+        <div style={{ marginTop: 'var(--space-5)' }}>
+          <div style={{
+            fontFamily: 'var(--font-button)',
+            fontSize: 'var(--fs-12)',
+            fontWeight: 600,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: 'var(--fg-muted)',
+            marginBottom: 'var(--space-2)',
+          }}>Where it goes</div>
+          <div role="radiogroup" aria-label="Where it goes" style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+            {(['back', 'back-support', 'arm'] as const).map((role) => {
+              const on = placement.role === role;
+              return (
+                <button
+                  key={role}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => onChange(role === 'arm' ? { role, armWidthCm: armWidth } : { role })}
+                  style={{
+                    padding: '4px 12px',
+                    borderRadius: 999,
+                    border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line)'}`,
+                    background: on ? 'var(--c-orange)' : 'var(--c-cream)',
+                    color: on ? 'var(--c-paper)' : 'var(--c-ink)',
+                    fontFamily: 'var(--font-sans)',
+                    fontSize: 'var(--fs-13)',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {SOFA_ACCESSORY_ROLE_LABEL[role]}
+                </button>
+              );
+            })}
+          </div>
+          <p className={styles.eyebrow} style={{ marginTop: 'var(--space-2)' }}>{PLACEMENT_HINT[placement.role]}</p>
+          {placement.role === 'arm' && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginTop: 'var(--space-2)', fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', color: 'var(--c-ink)' }}>
+              Arm width (cm)
+              <input
+                type="number"
+                min={5}
+                max={60}
+                step={1}
+                value={armWidth}
+                onChange={(e) => {
+                  const v = Math.round(Number(e.target.value));
+                  if (Number.isFinite(v) && v > 0) onChange({ role: 'arm', armWidthCm: v });
+                }}
+                style={{ width: 72, padding: '6px 8px', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)', fontSize: 'var(--fs-13)' }}
+              />
+            </label>
+          )}
+        </div>
       )}
-    </div>
+    </>
   );
 };
 

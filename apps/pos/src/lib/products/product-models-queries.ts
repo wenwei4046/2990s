@@ -52,6 +52,9 @@ export type AllowedOptions = {
   sofa_accessories_needed?: string[] | string;
   /** FABRIC_ACCESSORY only — where the piece goes on the sofa. */
   placement?:             SofaAccessoryPlacement;
+  /** FABRIC_ACCESSORY only — false: not on the sofa, sold on its own from the
+   *  catalogue (owner 2026-10-24). Absent = on the sofa. */
+  on_sofa?:               boolean;
 };
 
 export type ModelSkuRow = {

@@ -15,6 +15,7 @@ const row = (over: Partial<MfgCatalogRow> = {}): MfgCatalogRow => ({
   name: 'SOFA ANNSA 1A(LHF)',
   category: 'SOFA',
   categoryId: 'sofa',
+  onSofa: false,
   description: null,
   branding: null,
   sizeLabel: null,
