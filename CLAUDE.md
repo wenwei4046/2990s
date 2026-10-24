@@ -553,6 +553,26 @@ modules the way the repo's bundle detection does (whole-piece 1S/2S/3S, 1B/2B as
 
 ---
 
+## Modular › "Show in POS" — the SKUs' shelf flag, not the Model (2026-10-24)
+
+Owner 2026-10-24: a new SKU must not reach the tablet until someone switches it on in
+Modular. Houzs #4926 creates company 2's new single-SKU products (every category but
+sofa / bedframe / mattress) with `pos_active = false` — New SKU, Import SKUs, a Model's
+Generate SKUs — and the catalogue spine lists only `pos_active` SKUs.
+
+- 🔑 The switch reads and writes the Model's SKUs' `pos_active`
+  (`lib/products/show-in-pos.ts`; `useSetSkusOnPos` → `PATCH /mfg-products/:id
+  { posActive }`). It used to be `product_models.active`, which would show a new
+  product On while the tablet does not have it.
+- 🔑 **Off no longer deactivates the Model.** Houzs reads an inactive Model as retired
+  (its BUG-50: gone from both SKU Masters, POs refused). Off only takes the SKUs off the
+  tablet, so the product can still be priced and bought; to retire one, deactivate it in
+  Houzs ERP. On re-activates a Model switched off the old way.
+- Nothing on the order side reads `pos_active` (Houzs `validateItemCodes` goes by status
+  + Model active): an SO in Houzs ERP, a free gift and an Order Add-on's SVC line still
+  book a SKU that is off the tablet. The catalogue, the My Orders product swap and Houzs's
+  HR KPI item list honour it.
+
 ## Sofa Accessories — pieces on the Custom build (2026-10-16)
 
 Houzs category `FABRIC_ACCESSORY`, shown as "Sofa Accessory" (their #3857). Owner

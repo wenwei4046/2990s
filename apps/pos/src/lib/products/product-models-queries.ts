@@ -68,6 +68,11 @@ export type ModelSkuRow = {
   price1_sen: number | null;
   cost_price_sen: number;
   unit_m3_milli: number;
+  /** On the POS shelf — what Modular's "Show in POS" switches on a single-SKU
+   *  Model (lib/products/show-in-pos.ts). */
+  pos_active?: boolean;
+  /** Minted for one order line; never on the shelf. */
+  one_shot?: boolean;
 };
 
 export function useProductModels(opts?: { category?: MfgCategory }) {

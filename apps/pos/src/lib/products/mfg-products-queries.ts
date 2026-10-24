@@ -302,8 +302,31 @@ export function useUpdateMfgProductPrices() {
 /* (Removed 2026-06-01) useUpdateMfgProductPosActive — the standalone per-SKU
    "Visible" toggle was retired so Master Admin's Modular ON/OFF (allowed_options)
    is the single source of truth. The server mirrors allowed_options.sizes onto
-   pos_active (PATCH /product-models cascade); pos_active is no longer set from a
-   client toggle. */
+   pos_active (PATCH /product-models cascade). Modular stays the one place: its
+   "Show in POS" switch on a single-SKU Model sets that Model's SKUs (below). */
+
+/** Modular › "Show in POS" on a single-SKU Model: puts its SKUs on or off the
+ *  POS shelf (pos_active — lib/products/show-in-pos.ts). One PATCH per SKU that
+ *  changes; Houzs reads posActive for exactly this (its mfg-products PATCH). */
+export function useSetSkusOnPos() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { skuIds: readonly string[]; on: boolean }) => {
+      for (const id of args.skuIds) {
+        await authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ posActive: args.on }),
+        });
+      }
+    },
+    // Settled, not success: a second SKU failing still leaves the first changed.
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['product-models'] });
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });
+      qc.invalidateQueries({ queryKey: ['mfg-catalog'] });
+    },
+  });
+}
 
 /** D7 (Phase 3) — Master Account per-SKU permanent free gifts. Writes the
  *  selling-only `included_addons` ({addonId, qty}[]). The POS Configurator
