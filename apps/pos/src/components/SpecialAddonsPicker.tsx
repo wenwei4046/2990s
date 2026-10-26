@@ -1,5 +1,5 @@
 import { ChevronDown } from 'lucide-react';
-import { fmtRM } from '@2990s/shared';
+import { fmtRM, normalizeCompartmentCode, specialAddonBaseSellingSen } from '@2990s/shared';
 import type { SpecialAddonRow } from '../lib/queries';
 import styles from './BedframeOptions.module.css';
 
@@ -12,9 +12,20 @@ export type SpecialSel = { id: string; label: string; surcharge: number; choices
 
 const senToRm = (sen: number): number => Math.round(sen) / 100;
 
-/** RM surcharge for one add-on given its chosen per-group choice labels. */
-export const specialSelSurchargeRM = (addon: SpecialAddonRow, choices: string[]): number => {
-  let sen = addon.sellingPriceSen;
+/** A sofa build's compartment codes (canonical) — what Houzs reads off the
+ *  line's cells to price an add-on by compartment. */
+export const sofaBuildCompartments = (cells: ReadonlyArray<{ moduleId?: string | null }> | null | undefined): string[] =>
+  (cells ?? []).map((c) => normalizeCompartmentCode(String(c.moduleId ?? ''))).filter(Boolean);
+
+/** RM surcharge for one add-on given its chosen per-group choice labels. On a
+ *  sofa, `buildCompartments` (canonical codes) picks a compartment price the
+ *  way the server does (specialAddonBaseSellingSen); null = no build. */
+export const specialSelSurchargeRM = (
+  addon: SpecialAddonRow,
+  choices: string[],
+  buildCompartments: readonly string[] | null,
+): number => {
+  let sen = specialAddonBaseSellingSen(addon, buildCompartments);
   addon.optionGroups.forEach((g, i) => {
     const label = choices[i];
     const hit = label ? g.choices.find((c) => c.label === label) : undefined;
@@ -30,15 +41,31 @@ const defaultChoices = (addon: SpecialAddonRow): string[] =>
 export const specialSelsSurcharge = (sels: SpecialSel[]): number =>
   sels.reduce((acc, s) => acc + s.surcharge, 0);
 
+/** The same sum re-priced for the sofa's CURRENT compartments. A selection's
+ *  stored surcharge is a snapshot from when it was ticked, so a sofa whose
+ *  layout changed since must re-read it; an add-on no longer on offer keeps it. */
+export const specialSelsSurchargeFor = (
+  sels: SpecialSel[],
+  addons: SpecialAddonRow[],
+  buildCompartments: readonly string[] | null,
+): number =>
+  sels.reduce((acc, s) => {
+    const addon = addons.find((a) => a.code === s.id);
+    return acc + (addon ? specialSelSurchargeRM(addon, s.choices ?? [], buildCompartments) : s.surcharge);
+  }, 0);
+
 export interface SpecialAddonsPickerProps {
   /** Already filtered to the Model's allowed_options.specials ∩ category ∩ active. */
   addons: SpecialAddonRow[];
   value: SpecialSel[];
   onChange: (next: SpecialSel[]) => void;
   title?: string;
+  /** The sofa's compartment codes, so an add-on priced by compartment shows
+   *  this sofa's price. Omit off a sofa. */
+  buildCompartments?: readonly string[] | null;
 }
 
-export const SpecialAddonsPicker = ({ addons, value, onChange, title = 'Special Add-ons' }: SpecialAddonsPickerProps) => {
+export const SpecialAddonsPicker = ({ addons, value, onChange, title = 'Special Add-ons', buildCompartments = null }: SpecialAddonsPickerProps) => {
   if (addons.length === 0) return null;
 
   const toggle = (addon: SpecialAddonRow) => {
@@ -48,14 +75,14 @@ export const SpecialAddonsPicker = ({ addons, value, onChange, title = 'Special 
       return;
     }
     const choices = defaultChoices(addon);
-    onChange([...value, { id: addon.code, label: addon.label, choices, surcharge: specialSelSurchargeRM(addon, choices) }]);
+    onChange([...value, { id: addon.code, label: addon.label, choices, surcharge: specialSelSurchargeRM(addon, choices, buildCompartments) }]);
   };
   const changeChoice = (addon: SpecialAddonRow, groupIdx: number, label: string) => {
     onChange(value.map((s) => {
       if (s.id !== addon.code) return s;
       const choices = [...(s.choices ?? [])];
       choices[groupIdx] = label;
-      return { ...s, choices, surcharge: specialSelSurchargeRM(addon, choices) };
+      return { ...s, choices, surcharge: specialSelSurchargeRM(addon, choices, buildCompartments) };
     }));
   };
 
@@ -68,7 +95,7 @@ export const SpecialAddonsPicker = ({ addons, value, onChange, title = 'Special 
       <div className={styles.chipRow}>
         {addons.map((addon) => {
           const on = value.some((s) => s.id === addon.code);
-          const baseRm = senToRm(addon.sellingPriceSen);
+          const baseRm = senToRm(specialAddonBaseSellingSen(addon, buildCompartments));
           return (
             <button
               key={addon.code}

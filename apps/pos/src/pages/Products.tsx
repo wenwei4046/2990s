@@ -112,7 +112,7 @@ import {
   upsertHeightTierSelling,
 } from '../lib/products/seat-height-selling';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
-import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useModelFabricTierOverrides, useUpsertModelFabricTierOverride, useDeleteModelFabricTierOverride, useCompartmentPool, useCompartmentFabricTierOverrides, useUpsertCompartmentFabricTierOverride, useDeleteCompartmentFabricTierOverride, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
+import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useModelFabricTierOverrides, useUpsertModelFabricTierOverride, useDeleteModelFabricTierOverride, useCompartmentPool, useCompartmentFabricTierOverrides, useUpsertCompartmentFabricTierOverride, useDeleteCompartmentFabricTierOverride, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, type SpecialAddonCompartmentPrice, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
 import {
   useProductModels,
   useProductModel,
@@ -5435,7 +5435,7 @@ const rmToSen = (rm: number): number => Math.round(rm * 100);
 
 const emptySpecialAddon = (): SpecialAddonInput => ({
   code: '', label: '', soDescription: '', categories: [],
-  sellingPriceSen: 0, costPriceSen: 0, optionGroups: [], active: true, sortOrder: 0,
+  sellingPriceSen: 0, costPriceSen: 0, optionGroups: [], compartmentPrices: [], active: true, sortOrder: 0,
 });
 
 const SpecialAddonsManager = () => {
@@ -5444,6 +5444,7 @@ const SpecialAddonsManager = () => {
   const create  = useCreateSpecialAddon();
   const update  = useUpdateSpecialAddon();
   const del     = useDeleteSpecialAddon();
+  const compartmentPool = useCompartmentPool();
 
   const [editing, setEditing] = useState<{ id: string | null; draft: SpecialAddonInput } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -5455,6 +5456,7 @@ const SpecialAddonsManager = () => {
       code: row.code, label: row.label, soDescription: row.soDescription,
       categories: [...row.categories], sellingPriceSen: row.sellingPriceSen,
       costPriceSen: row.costPriceSen, optionGroups: JSON.parse(JSON.stringify(row.optionGroups)),
+      compartmentPrices: row.compartmentPrices.map((p) => ({ ...p })),
       active: row.active, sortOrder: row.sortOrder,
     } });
   };
@@ -5481,6 +5483,18 @@ const SpecialAddonsManager = () => {
   const removeChoice = (gi: number, ci: number) =>
     editing && patchGroup(gi, { choices: editing.draft.optionGroups[gi]!.choices.filter((_, i) => i !== ci) });
 
+  // ── Detect by compartment (owner 2026-10-26) — sofa only ─────────────────
+  // On = at least one row; ticking it starts a row at the base price.
+  const setCompartmentPrices = (rows: SpecialAddonCompartmentPrice[]) => patch({ compartmentPrices: rows });
+  const setDetectByCompartment = (on: boolean) =>
+    editing && setCompartmentPrices(on ? [{ compartment: '', sellingPriceSen: editing.draft.sellingPriceSen }] : []);
+  const addCompartmentPrice = () =>
+    editing && setCompartmentPrices([...editing.draft.compartmentPrices, { compartment: '', sellingPriceSen: editing.draft.sellingPriceSen }]);
+  const patchCompartmentPrice = (ri: number, p: Partial<SpecialAddonCompartmentPrice>) =>
+    editing && setCompartmentPrices(editing.draft.compartmentPrices.map((r, i) => (i === ri ? { ...r, ...p } : r)));
+  const removeCompartmentPrice = (ri: number) =>
+    editing && setCompartmentPrices(editing.draft.compartmentPrices.filter((_, i) => i !== ri));
+
   const save = async () => {
     if (!editing) return;
     setError(null);
@@ -5491,9 +5505,20 @@ const SpecialAddonsManager = () => {
       if (!g.label.trim()) { setError('Every follow-up question needs a label.'); return; }
       if (g.choices.length === 0 || g.choices.some((c) => !c.label.trim())) { setError(`"${g.label || 'question'}" needs at least one named choice.`); return; }
     }
+    // Compartments only exist on a sofa, so the prices go when SOFA is unticked.
+    const compartmentPrices = d.categories.includes('SOFA')
+      ? d.compartmentPrices.map((r) => ({ compartment: normalizeCompartmentCode(r.compartment), sellingPriceSen: r.sellingPriceSen }))
+      : [];
+    const seenCompartments = new Set<string>();
+    for (const r of compartmentPrices) {
+      if (!r.compartment) { setError('Pick a compartment for every compartment price.'); return; }
+      if (seenCompartments.has(r.compartment)) { setError(`${r.compartment} is listed twice — keep one price per compartment.`); return; }
+      seenCompartments.add(r.compartment);
+    }
+    const payload: SpecialAddonInput = { ...d, compartmentPrices };
     try {
-      if (editing.id) await update.mutateAsync({ id: editing.id, patch: d });
-      else await create.mutateAsync(d);
+      if (editing.id) await update.mutateAsync({ id: editing.id, patch: payload });
+      else await create.mutateAsync(payload);
       setEditing(null);
     } catch (err) { setError(String((err as Error).message ?? err)); }
   };
@@ -5512,6 +5537,7 @@ const SpecialAddonsManager = () => {
     <div style={{ padding: 'var(--space-5)', maxWidth: 860 }}>
       <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
         每个 add-on = 名字 + SO 描述 + 适用 Category + 加价（可为负 = 减价）+ 0~多个追问（如 Right Drawer → 10″/8″，每个选项可各带价）。
+        沙发的 add-on 可以开 <strong>Detect by compartment</strong>：沙发有某个部件（如 CNR）就改用那个价。
         勾哪个 Model 用，在 <strong>Modular</strong> tab 决定。只动 POS 卖价，不开新 SKU、不动成本。
       </p>
 
@@ -5566,6 +5592,46 @@ const SpecialAddonsManager = () => {
               Active
             </label>
           </div>
+
+          {/* Detect by compartment — like the per-compartment fabric prices. */}
+          {editing.draft.categories.includes('SOFA') && (
+            <div style={{ borderTop: '1px solid var(--line)', paddingTop: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-13)', fontWeight: 600 }}>
+                <input type="checkbox" checked={editing.draft.compartmentPrices.length > 0} onChange={(e) => setDetectByCompartment(e.target.checked)} />
+                Detect by compartment
+              </label>
+              <span style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', margin: '4px 0 6px' }}>
+                沙发有下面的部件，这个 add-on 就改用那个价（不用 Base price）；命中几个就取最高的。追问的加价照样加上去。
+              </span>
+              {editing.draft.compartmentPrices.length > 0 && (
+                <>
+                  {editing.draft.compartmentPrices.map((r, ri) => {
+                    const takenElsewhere = new Set(editing.draft.compartmentPrices.filter((_, i) => i !== ri).map((x) => x.compartment));
+                    const options = compartmentPool.filter((c) => !takenElsewhere.has(c));
+                    if (r.compartment && !options.includes(r.compartment)) options.unshift(r.compartment);
+                    return (
+                      <div key={ri} style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 4, paddingLeft: 'var(--space-3)' }}>
+                        <select
+                          aria-label="Compartment" style={{ ...inputStyle, flex: '1 1 160px' }}
+                          value={r.compartment} onChange={(e) => patchCompartmentPrice(ri, { compartment: e.target.value })}
+                        >
+                          <option value="">Select a compartment…</option>
+                          {options.map((c) => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                        <input
+                          type="number" step={1} aria-label={`Price (RM) with ${r.compartment || 'this compartment'}`} title="RM (can be −)"
+                          style={{ ...inputStyle, width: 120 }}
+                          value={senToRm(r.sellingPriceSen)} onChange={(e) => patchCompartmentPrice(ri, { sellingPriceSen: rmToSen(Number(e.target.value) || 0) })}
+                        />
+                        <button type="button" aria-label="Remove compartment price" onClick={() => removeCompartmentPrice(ri)} style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', background: 'none', border: 'none', cursor: 'pointer' }}>✕</button>
+                      </div>
+                    );
+                  })}
+                  <button type="button" onClick={addCompartmentPrice} style={{ fontSize: 'var(--fs-12)', marginLeft: 'var(--space-3)', background: 'none', border: '1px dashed var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '2px 8px', cursor: 'pointer' }}>+ compartment</button>
+                </>
+              )}
+            </div>
+          )}
 
           {/* option_groups */}
           <div style={{ borderTop: '1px solid var(--line)', paddingTop: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
@@ -5627,7 +5693,12 @@ const SpecialAddonsManager = () => {
                   <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{row.soDescription || row.code}</div>
                 </td>
                 <td style={{ padding: '6px 8px', fontSize: 'var(--fs-12)' }}>{row.categories.join(', ') || '—'}</td>
-                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-13)', fontWeight: 600, whiteSpace: 'nowrap' }}>{rm(row.sellingPriceSen)}</td>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-13)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  {rm(row.sellingPriceSen)}
+                  {row.compartmentPrices.map((p) => (
+                    <div key={p.compartment} style={{ fontSize: 'var(--fs-12)', fontWeight: 400, color: 'var(--fg-muted)' }}>{p.compartment}: {rm(p.sellingPriceSen)}</div>
+                  ))}
+                </td>
                 <td style={{ padding: '6px 8px', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
                   {row.optionGroups.length === 0 ? '—' : row.optionGroups.map((g) => `${g.label} (${g.choices.length})`).join(' · ')}
                 </td>

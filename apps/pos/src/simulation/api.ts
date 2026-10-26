@@ -1,7 +1,7 @@
 import { PAYMENT_METHOD_CODES } from '@2990s/shared/payment-methods';
 import { missingVariantAxes } from '@2990s/shared/so-variant-rule';
-import { computeMfgLinePrice, type MfgPricingProduct } from '@2990s/shared/mfg-pricing';
-import { buildVariantSummary, matchComboSubset, campaignsCoveringLine, buildFreeGiftTriggers, validateFreeGiftClaims } from '@2990s/shared';
+import { buildSpecialsPoolFromAddons, computeMfgLinePrice, type MfgPricingProduct } from '@2990s/shared/mfg-pricing';
+import { buildVariantSummary, matchComboSubset, campaignsCoveringLine, buildFreeGiftTriggers, validateFreeGiftClaims, normalizeCompartmentCode, splitSofaCode } from '@2990s/shared';
 import { meetsProceedGate, meetsProcessingDatePaymentGate } from '@2990s/shared/order-rules';
 import { splitSofaBuildIntoModuleLines } from '@2990s/shared/so-sofa-split';
 import { planVoucher } from '../lib/voucher-apply';
@@ -16,7 +16,7 @@ import { marketingDispatch, resetMarketingSimulation, simulationPersona } from '
 export const SIMULATION_STORAGE_KEY = '2990:mobile-simulation:v1';
 type Row = Record<string, any>;
 type StoredOrder = { salesOrder: Row; items: Row[]; payments: Row[] };
-type Store = { version: 1; serial: number; cart: { lines: Row[]; sourceQuoteId: string | null }; orders: StoredOrder[]; quotes: Row[]; picks: Row[]; pwp: Row[]; slips: Record<string, Row>; redemptions: Row[]; idempotency: Record<string, { body: string; docNo: string }>; modelOptions?: Record<string, Row>; modelActive?: Record<string, boolean>; skuPosActive?: Record<string, boolean> };
+type Store = { version: 1; serial: number; cart: { lines: Row[]; sourceQuoteId: string | null }; orders: StoredOrder[]; quotes: Row[]; picks: Row[]; pwp: Row[]; slips: Record<string, Row>; redemptions: Row[]; idempotency: Record<string, { body: string; docNo: string }>; modelOptions?: Record<string, Row>; modelActive?: Record<string, boolean>; skuPosActive?: Record<string, boolean>; specialAddons?: Row[] };
 let memory: Store | undefined;
 // Modular saves (PATCH /product-models/:id, and a SKU's posActive through PATCH
 // /mfg-products/:id) change a fixture Model's allowed_options and active, and a
@@ -146,12 +146,19 @@ function dateIssue(header: Row, items: Row[]): Response | null {
   }
   return null;
 }
-function variantSurcharge(item: Row, variants: Row): number {
+// Special Add-ons edited on the Products page; the fixtures until one is saved.
+const specialAddonsOf = (store: Store): Row[] => store.specialAddons ?? clone(fixtures.specialAddons);
+// Like Houzs's tbc-update: the specials are priced on the build's compartments,
+// read off its module lines' codes.
+function variantSurcharge(item: Row, variants: Row, compartments: string[] | null): number {
   const category = String(item.item_group).toUpperCase() as MfgPricingProduct['category'];
-  const specials = fixtures.specialAddons.map((s) => ({ value: String(s.code), priceSen: 0, sellingPriceSen: Number(s.sellingPriceSen) }));
+  const defs = specialAddonsOf(getStore()).map((s) => ({ code: String(s.code), sellingPriceSen: Number(s.sellingPriceSen), costPriceSen: Number(s.costPriceSen ?? 0), optionGroups: s.optionGroups ?? [], compartmentPrices: s.compartmentPrices ?? [] }));
+  const specials = buildSpecialsPoolFromAddons(defs, variants.specials ?? [], variants.specialChoices ?? null, compartments);
   const priced = computeMfgLinePrice({ product: { category, basePriceSen: null }, qty: 1, divanHeight: variants.divanHeight, legHeight: variants.legHeight, sofaLegHeight: variants.sofaLegHeight, totalHeight: variants.totalHeight, specials: variants.specials ?? [], fabric: { tier: null, surchargeSen: String(variants.fabricCode ?? variants.colourId ?? '').startsWith('EZ') ? 12500 : 0 } }, { ...fixtures.maintenance, specials, sofaSpecials: specials });
   return priced.unitPriceSen + Math.round(Number(variants.extraAddonAmountRM ?? 0) * 100);
 }
+const buildCompartmentsOf = (members: Row[]): string[] =>
+  members.map((l) => normalizeCompartmentCode(splitSofaCode(String(l.item_code)).sizeCode)).filter(Boolean);
 function itemEditIssue(order: StoredOrder): Response | null {
   if (order.salesOrder.status !== 'CONFIRMED') return failure('so_locked', 'Only a confirmed, editable order can change products.', 409);
   if (order.salesOrder.processing_date && order.salesOrder.processing_date < today()) return failure('so_locked_processing', 'The Processing Date has passed; products and dates are locked.', 409);
@@ -233,7 +240,23 @@ async function dispatch(path: string, params: URLSearchParams, method: string, b
     return json({ picks: store.picks.filter((p) => !params.get('baseModel') || p.baseModel === params.get('baseModel')) });
   }
   if (['/pos-pools/bedframe-colours', '/pos-pools/bedframe-options', '/pos-pools/product-bundles', '/pos-pools/product-compartments', '/pos-pools/product-fabrics', '/pos-pools/product-bedframe-colours', '/pos-pools/product-size-variants'].includes(path)) return json({ rows: [] }); // Legacy UUID pools are unused by these mfg fixtures.
-  if (path === '/special-addons') return json({ addons: fixtures.specialAddons });
+  if (path === '/special-addons') {
+    const addons = specialAddonsOf(store);
+    if (method === 'POST') {
+      if (addons.some((a) => a.code === body.code)) return failure('duplicate_code', 'a special add-on with this code already exists', 409);
+      const addon = { ...body, id: uid('special') };
+      store.specialAddons = [...addons, addon]; save(); return json({ addon }, 201);
+    }
+    return json({ addons });
+  }
+  if (/^\/special-addons\/[^/]+$/.test(path) && (method === 'PATCH' || method === 'DELETE')) {
+    const id = path.split('/')[2];
+    const addons = specialAddonsOf(store);
+    const addon = addons.find((a) => a.id === id);
+    if (!addon) return failure('not_found', 'Demo add-on not found.', 404);
+    store.specialAddons = method === 'DELETE' ? addons.filter((a) => a.id !== id) : addons.map((a) => (a.id === id ? { ...a, ...body } : a));
+    save(); return json(method === 'DELETE' ? { ok: true } : { addon: { ...addon, ...body } });
+  }
   if (path === '/addons') return json({ addons: fixtures.addons });
   if (path === '/model-free-gifts') return json(fixtures.modelGifts);
   if (path === '/free-item-campaigns') return json(fixtures.freeItemCampaigns);
@@ -429,9 +452,10 @@ async function dispatch(path: string, params: URLSearchParams, method: string, b
       if (action === 'tbc-update') {
         const variants = { ...item.variants, ...body.variants };
         if (order.salesOrder.processing_date && missingVariantAxes(item.item_group, variants).length) return failure('variants_incomplete', 'Remove the dates before returning required variants to Confirm later.', 409);
-        const delta = variantSurcharge(item, variants) - variantSurcharge(item, item.variants);
-        if (delta < 0) return failure('price_floor', 'The edited variants cannot reduce this booked item below its current price.', 409);
         const members = item.variants.buildKey ? order.items.filter((l) => l.variants?.buildKey === item.variants.buildKey) : [item];
+        const compartments = item.item_group === 'sofa' ? buildCompartmentsOf(members) : null;
+        const delta = variantSurcharge(item, variants, compartments) - variantSurcharge(item, item.variants, compartments);
+        if (delta < 0) return failure('price_floor', 'The edited variants cannot reduce this booked item below its current price.', 409);
         for (const member of members) {
           member.variants = { ...member.variants, ...body.variants };
           member.description2 = buildVariantSummary(member.item_group, member.variants) || null;
@@ -448,7 +472,7 @@ async function dispatch(path: string, params: URLSearchParams, method: string, b
         if (reward && (reward.rewardCategory !== p.category || !reward.eligibleRewardModelIds.includes(p.model_id))) return failure('pwp_line_locked', 'The replacement must stay within this voucher’s eligible range.', 409);
         const nextVariants = { ...item.variants, ...(p.size_code ? { sizeId: p.size_code === 'K' ? 'king' : 'queen' } : {}) };
         const base = reward ? reward.type === 'promo' ? 0 : p.pwp_price_sen ?? 0 : p.sell_price_sen;
-        const price = base + variantSurcharge({ ...item, item_group: p.category.toLowerCase() }, nextVariants);
+        const price = base + variantSurcharge({ ...item, item_group: p.category.toLowerCase() }, nextVariants, null);
         if (price < item.unit_price_sen) return failure('so_total_below_original', 'The replacement cannot reduce the original sales order total.', 409);
         Object.assign(item, { item_code: p.code, item_group: p.category.toLowerCase(), description: p.name, description2: buildVariantSummary(p.category, nextVariants), unit_price_sen: price, unit_price_centi: price, total_sen: price * item.qty - item.discount_sen, total_centi: price * item.qty - item.discount_sen, variants: nextVariants });
       }

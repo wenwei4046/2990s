@@ -1978,6 +1978,9 @@ export const useDeleteFreeItemCampaign = () => {
  * reused by allowed_options.specials + variants.specials. */
 export interface SpecialAddonChoice { label: string; extraSen: number; }
 export interface SpecialAddonGroup { label: string; required: boolean; choices: SpecialAddonChoice[]; }
+/** Detect by compartment (owner 2026-10-26): the add-on's price on a sofa that
+ *  carries this compartment — the highest wins when several match. */
+export interface SpecialAddonCompartmentPrice { compartment: string; sellingPriceSen: number; }
 export interface SpecialAddonRow {
   id: string;
   code: string;
@@ -1987,6 +1990,8 @@ export interface SpecialAddonRow {
   sellingPriceSen: number;
   costPriceSen: number;
   optionGroups: SpecialAddonGroup[];
+  /** [] = one price on every sofa. */
+  compartmentPrices: SpecialAddonCompartmentPrice[];
   active: boolean;
   sortOrder: number;
 }
@@ -1998,6 +2003,7 @@ export interface SpecialAddonInput {
   sellingPriceSen: number;
   costPriceSen: number;
   optionGroups: SpecialAddonGroup[];
+  compartmentPrices: SpecialAddonCompartmentPrice[];
   active: boolean;
   sortOrder: number;
 }
@@ -2007,8 +2013,9 @@ export const useSpecialAddons = () =>
     queryKey: ['special-addons'],
     staleTime: 60_000,
     queryFn: async (): Promise<SpecialAddonRow[]> => {
-      const body = await authedFetch<{ addons: SpecialAddonRow[] }>('/special-addons');
-      return body.addons ?? [];
+      const body = await authedFetch<{ addons: Array<Omit<SpecialAddonRow, 'compartmentPrices'> & { compartmentPrices?: SpecialAddonCompartmentPrice[] }> }>('/special-addons');
+      // 2990's own API (local dev) has no compartment prices.
+      return (body.addons ?? []).map((a) => ({ ...a, compartmentPrices: a.compartmentPrices ?? [] }));
     },
   });
 
