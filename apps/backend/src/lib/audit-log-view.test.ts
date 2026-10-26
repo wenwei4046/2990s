@@ -72,7 +72,7 @@ describe('matchesSearch', () => {
 describe('methodLabel + methodDetail', () => {
   it('labels the four live method codes from the shared vocabulary', () => {
     expect(methodLabel('installment')).toBe('Installment');
-    expect(methodLabel('transfer')).toBe('Bank transfer / DuitNow');
+    expect(methodLabel('transfer')).toBe('Bank transfer');
     expect(methodLabel('merchant')).toBe('Merchant');
     expect(methodLabel('cash')).toBe('Cash');
   });

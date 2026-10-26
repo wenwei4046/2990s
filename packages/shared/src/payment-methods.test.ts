@@ -34,7 +34,7 @@ describe('payment-methods', () => {
       expect(PAYMENT_METHOD_DEFAULT_LABELS[code]).toBeTruthy();
     }
     // POS card wording — the Online row's default label is the POS phrasing.
-    expect(PAYMENT_METHOD_DEFAULT_LABELS.transfer).toBe('Bank transfer / DuitNow');
+    expect(PAYMENT_METHOD_DEFAULT_LABELS.transfer).toBe('Bank transfer');
   });
 
   it('isCorePaymentMethodRow guards the locked set only', () => {

@@ -154,7 +154,7 @@ export const ConfirmPaymentStep = ({
           onChange={(e) => update('approvalCode', e.target.value)}
           placeholder={
             form.paymentMethod === 'transfer'
-              ? 'DuitNow / bank reference'
+              ? 'Bank reference'
               : form.paymentMethod === 'installment'
                 ? 'Agreement / contract no.'
                 : form.paymentMethod === 'cash'
@@ -200,7 +200,7 @@ export const ConfirmPaymentStep = ({
               value={p.approvalCode}
               onChange={(e) => patchExtra(i, { approvalCode: e.target.value })}
               placeholder={
-                p.method === 'transfer' ? 'DuitNow / bank reference'
+                p.method === 'transfer' ? 'Bank reference'
                   : p.method === 'installment' ? 'Agreement / contract no.'
                     : p.method === 'cash' ? 'Cash receipt / reference no.'
                       : 'Approval code from POS terminal'

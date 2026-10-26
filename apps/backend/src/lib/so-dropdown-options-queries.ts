@@ -149,7 +149,7 @@ export const FALLBACK_OPTIONS: Record<SoDropdownCategory, SoDropdownOption[]> = 
      installment plan are separate categories below. */
   payment_method: [
     { id: 'fallback-pm-merchant',    category: 'payment_method', value: 'Merchant',    label: 'Merchant',                sortOrder: 1, active: true },
-    { id: 'fallback-pm-online',      category: 'payment_method', value: 'Online',      label: 'Bank transfer / DuitNow', sortOrder: 2, active: true },
+    { id: 'fallback-pm-online',      category: 'payment_method', value: 'Online',      label: 'Bank transfer',           sortOrder: 2, active: true },
     { id: 'fallback-pm-installment', category: 'payment_method', value: 'Installment', label: 'Installment',             sortOrder: 3, active: true },
     { id: 'fallback-pm-cash',        category: 'payment_method', value: 'Cash',        label: 'Cash',                    sortOrder: 4, active: true },
   ],
