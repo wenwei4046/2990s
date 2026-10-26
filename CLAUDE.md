@@ -638,6 +638,40 @@ on its own instead (2026-10-24, last bullets). Engine + reasons:
   `item_group` whatever the POS sends), so such an item goes in **Accessory** in the SKU
   Master — tap-to-add, nothing to pick.
 
+## Special Add-ons — "Detect by compartment" (2026-10-26)
+
+Owner 2026-10-26: a sofa add-on can change price by the sofa's compartments, "the same
+concept as fabric" (the per-compartment fabric prices) — e.g. Latex Seat RM 500, but
+RM 800 on a sofa with a corner. Products › Special Add-ons › an add-on with SOFA ticked
+› **Detect by compartment**: rows of compartment → price.
+
+- **The rule** (`specialAddonBaseSellingSen`, `packages/shared/src/mfg-pricing.ts`): on a
+  sofa whose build holds a listed compartment, the listed price REPLACES the base; several
+  listed → the highest; none, or no build → the base. Follow-up choice extras still stack.
+  Selling only — cost is untouched, like the choices.
+- 🔑 **Stored in Houzs**, `scm.special_addons.compartment_prices` (their migration
+  `20261026T1430`, `[{compartment, sellingPriceSen}]`, canonical codes). 2990's own
+  `special_addons` has no such column: the old API and Backend pass `null` and price the
+  base. The same function lives in Houzs's `backend/src/scm/shared/mfg-pricing.ts` and
+  `frontend/src/vendor/shared/mfg-pricing.ts` — **keep all three identical**, or the drift
+  gate starts measuring the difference between two rules (see `sofa-build.ts` below).
+- 🔑 **The compartments are the line's cells**, normalised. Quick Pick and the Custom build
+  store cells, so both price by compartment; a preset bundle (`bundleId`) stores none and
+  takes the base, on both sides. A split SO build has no cells left: My Orders' line
+  editor reads them off `target.buildCells`, and Houzs's `tbc-update` off the sibling
+  lines' item codes (`buildCompartments` on the recompute item) — the same reading.
+- 🔑 **The Custom build now sells add-ons** (owner 2026-10-26; it never did — #456 left it
+  as a to-do). They go on the FIRST sofa's line only, like the remark and the extra
+  charge, priced on that sofa's cells (`emittedBuilds[0]`), and the picks survive the
+  Quick Pick ⇄ Customize toggle.
+- A selection's stored `surcharge` is a snapshot from when it was ticked. Price a sofa's
+  add-ons with `specialSelsSurchargeFor(sels, addons, compartments)`, never
+  `specialSelsSurcharge`, or a layout change leaves the old figure in the total.
+- Houzs's ERP Specials panel saves the whole set through `/special-addons/save` and has
+  no compartment editor: an entry that omits `compartmentPrices` keeps the live ones.
+  Houzs's office SO editor (`SoLineCard`) previews a split module line at the base — the
+  server's figure for that line too; office users type their price anyway.
+
 ## Sofa combos — the POS's own table inside Houzs (since 2026-09-26)
 
 **Owner ruling 2026-09-26: Houzs's combos are Houzs's COST; ours are the POS's
