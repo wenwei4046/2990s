@@ -32,7 +32,7 @@ import {
 } from '../lib/queries';
 import { FabricColourPicker, type FabricSelection } from './FabricColourPicker';
 import { OptionSelect } from './BedframeOptions';
-import { SpecialAddonsPicker, specialSelSurchargeRM, specialSelsSurcharge, type SpecialSel } from './SpecialAddonsPicker';
+import { SpecialAddonsPicker, sofaBuildCompartments, specialSelSurchargeRM, specialSelsSurchargeFor, type SpecialSel } from './SpecialAddonsPicker';
 import { Button } from '@2990s/design-system';
 import styles from './TbcLineEditor.module.css';
 
@@ -340,6 +340,15 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
       (a) => a.active && allowed.has(a.code) && a.categories.map((x) => x.toUpperCase()).includes(cat),
     );
   }, [specialsQ.data, allowedSpecialsQ.data, product.data?.category]);
+  // A sofa's compartments, read the way Houzs's tbc-update reads them: the
+  // split build's module lines, else the cells a whole-unit line carries. They
+  // price an add-on set by compartment; null off a sofa.
+  const lineCompartments = useMemo(
+    () => target.itemGroup === 'sofa'
+      ? sofaBuildCompartments(target.buildCells ?? (Array.isArray(v.cells) ? (v.cells as Array<{ moduleId?: string }>) : []))
+      : null,
+    [target.itemGroup, target.buildCells, v],
+  );
   const seededSpecials = useMemo<SpecialSel[]>(() => {
     const ids = (v.specialIds as string[] | undefined) ?? [];
     const labels = (v.specialLabels as string[] | undefined) ?? [];
@@ -351,14 +360,16 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
         id: code,
         label: addon?.label ?? labels[i] ?? code,
         choices: ch,
-        surcharge: addon ? specialSelSurchargeRM(addon, ch) : 0,
+        surcharge: addon ? specialSelSurchargeRM(addon, ch, lineCompartments) : 0,
       };
     });
-  }, [v, specialsQ.data]);
+  }, [v, specialsQ.data, lineCompartments]);
   const [specialSel, setSpecialSel] = useState<SpecialSel[] | undefined>(undefined);
   const shownSpecials = specialSel ?? seededSpecials;
+  // Both sides re-priced on today's add-on list, as the server's delta is.
   const specialsDeltaRM = specialSel !== undefined
-    ? specialSelsSurcharge(specialSel) - specialSelsSurcharge(seededSpecials)
+    ? specialSelsSurchargeFor(specialSel, specialsQ.data ?? [], lineCompartments)
+      - specialSelsSurchargeFor(seededSpecials, specialsQ.data ?? [], lineCompartments)
     : 0;
 
   /* ── Custom / other (free-text special-order line) ────────────────────
@@ -539,7 +550,7 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
       )}
 
       {specialAddons.length > 0 && (
-        <SpecialAddonsPicker addons={specialAddons} value={shownSpecials} onChange={setSpecialSel} />
+        <SpecialAddonsPicker addons={specialAddons} value={shownSpecials} onChange={setSpecialSel} buildCompartments={lineCompartments} />
       )}
 
       {/* Custom / other — mirrors the Houzs SpecialOrders Custom-order fields.

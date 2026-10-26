@@ -368,7 +368,8 @@ const SoLineCardInner = ({
     const choices = (draft.variants.specialChoices && typeof draft.variants.specialChoices === 'object')
       ? (draft.variants.specialChoices as Record<string, string[]>)
       : null;
-    const specialsPool = buildSpecialsPoolFromAddons(specialDefs, specs, choices);
+    // null build: the 2990 API's add-ons carry no compartment prices (Houzs's do).
+    const specialsPool = buildSpecialsPoolFromAddons(specialDefs, specs, choices, null);
     const effMaint = maint ? { ...maint, specials: specialsPool, sofaSpecials: specialsPool } : maint;
     return computeMfgLinePrice(
       {

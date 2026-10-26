@@ -36,11 +36,12 @@ import {
 import { buildSeamlessRun, renderSeamlessSofa, renderSeamlessGroup, isFunctionalSeat, SOFA_BAND, SOFA_INK, type SeamlessRun } from '../lib/sofa-seamless';
 import { canonicalConversion, canonicalMatchesCells } from '../lib/sofa-canonical';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
-import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useModelFabricTierOverrides, useCompartmentFabricTierOverrides, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
+import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useModelFabricTierOverrides, useCompartmentFabricTierOverrides, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow, type SpecialAddonRow } from '../lib/queries';
 import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
+import { SpecialAddonsPicker, sofaBuildCompartments, specialSelsSurchargeFor, type SpecialSel } from '../components/SpecialAddonsPicker';
 import { renderCornerSofa, cornerCompositeFromCells, type CornerGeo } from '../lib/sofa-corner';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { SofaAccessoryArt } from '../components/SofaAccessoryArt';
@@ -315,6 +316,13 @@ interface CustomBuilderProps {
   remark?: string;
   extraAddonNote?: string;
   extraAmountRm?: number;
+  /** Special Add-ons (owner 2026-10-26) — parent-owned like the leg height, so a
+   *  pick survives the Quick Pick ⇄ Customize toggle. They go on the FIRST
+   *  sofa's line only, as the remark and extra do, and are priced on that
+   *  sofa's compartments (an add-on can be priced by compartment). */
+  specialAddons?: SpecialAddonRow[];
+  specialSel?: SpecialSel[];
+  onSpecialSelChange?: (next: SpecialSel[]) => void;
   /** TBC sofa exchange (Loo 2026-06-12) — when set, the footer button reads
    *  "Confirm Change" and a SINGLE-group build is handed to this callback
    *  instead of the cart (the Configurator then replaces the SO build via
@@ -372,7 +380,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly, initialAccessories, orderPieces = null }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, specialAddons, specialSel = [], onSpecialSelChange, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly, initialAccessories, orderPieces = null }: CustomBuilderProps) => {
   const isPhone = useMediaQuery('(max-width: 767px)');
   const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
   const paletteRef = useRef<HTMLDialogElement>(null);
@@ -957,6 +965,25 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   }, [priceResult.groups, cells, depth]);
   const effectiveBuildCount = priceResult.groups.length - headrestFold.skip.size;
 
+  // The cells of each sofa handleAdd emits, in emit order: its own cells plus
+  // any headrest folded onto it. The first one carries the line's add-ons.
+  const emittedBuilds = useMemo(() => {
+    const byId = new Map<string, Cell>();
+    for (const c of cells) { if (c.id) byId.set(c.id, c); }
+    const cellsOf = (gi: number): Cell[] =>
+      (priceResult.groups[gi]?.cellIds ?? []).map((id) => byId.get(id)).filter((c): c is Cell => c != null);
+    return priceResult.groups.flatMap((_, gi) => {
+      if (headrestFold.skip.has(gi)) return [];
+      const own = cellsOf(gi);
+      if (own.length === 0) return [];
+      return [[...own, ...(headrestFold.foldInto.get(gi) ?? []).flatMap(cellsOf)]];
+    });
+  }, [cells, priceResult.groups, headrestFold]);
+  // An add-on priced by compartment reads the lead sofa's compartments — the
+  // ones Houzs reads off that line's cells.
+  const leadCompartments = useMemo(() => sofaBuildCompartments(emittedBuilds[0]), [emittedBuilds]);
+  const specialsRm = specialSelsSurchargeFor(specialSel, specialAddons ?? [], leadCompartments);
+
   // Eagerly load bbox for any matched-bundle composite PNG so the overlay
   // image scales correctly the moment it appears (avoids a fall-back-to-cells
   // flicker between drop and overlay render).
@@ -1259,8 +1286,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         ...(!usedEditKey && remark.trim() ? { remark: remark.trim() } : {}),
         ...(!usedEditKey && extraAddonNote.trim() ? { extraAddonNote: extraAddonNote.trim() } : {}),
         ...(!usedEditKey && extraAmountRm > 0 ? { extraAddonAmountRM: extraAmountRm } : {}),
+        // Special Add-ons ride the same lead line, priced on ITS cells.
+        ...(!usedEditKey && specialSel.length > 0 ? {
+          specialIds: specialSel.map((s) => s.id),
+          specialLabels: specialSel.map((s) => s.label),
+          specialChoices: Object.fromEntries(specialSel.map((s) => [s.id, s.choices ?? []])),
+        } : {}),
         ...(groupPieces.length > 0 ? { accessories: groupPieces.map((p) => ({ ...p })) } : {}),
-        total: foldedPrice + sofaFabricDelta + legSurchargeRm + (!usedEditKey ? extraAmountRm : 0),
+        total: foldedPrice + sofaFabricDelta + legSurchargeRm
+          + (!usedEditKey ? extraAmountRm + specialSelsSurchargeFor(specialSel, specialAddons ?? [], sofaBuildCompartments(groupCells)) : 0),
         summary,
       };
       /* TBC sofa exchange — hand the (single) build to the Configurator's
@@ -1548,6 +1582,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             onClear={() => { setFabricSel(null); onFabricChange?.(null); }}
           />
         )}
+        {!layoutOnly && specialAddons && onSpecialSelChange && (
+          <SpecialAddonsPicker addons={specialAddons} value={specialSel} onChange={onSpecialSelChange} buildCompartments={leadCompartments} />
+        )}
         {legBlock}
         {remarkBlock}
       </dialog>
@@ -1564,7 +1601,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         {!layoutOnly && (
           <div className={styles.mobilePreviewPrice}>
             {allClosed && cells.length > 0 ? 'Total ' : 'Provisional '}
-            {fmtRM(priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm + accessoriesRm)}
+            {fmtRM(priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm + specialsRm + accessoriesRm)}
           </div>
         )}
         <header className={styles.canvasHead}>
@@ -2279,9 +2316,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         {!layoutOnly && <footer className={styles.priceBar}>
           <div>
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
-            {/* extraAmountRm is per-unit on the LEAD group only (see handleAdd),
-                so it's added ONCE here — not × groups.length like fabric/leg. */}
-            <PriceTag className={styles.footerPrice} amount={Math.round(priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm + accessoriesRm)} size="lg" />
+            {/* extraAmountRm and the add-ons are per-unit on the LEAD group only
+                (see handleAdd), so they're added ONCE here — not × groups.length
+                like fabric/leg. */}
+            <PriceTag className={styles.footerPrice} amount={Math.round(priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm + specialsRm + accessoriesRm)} size="lg" />
             {/* Combo cue (HOOKKA parity) — when any group priced via a combo,
                 show the savings the combo gave over the matched subset's own
                 à-la-carte sum. Extra modules outside the combo subset stay at

@@ -86,7 +86,10 @@ export const specialAddons = [
   ['SOFA-FULL', 'Sofa Full Fabric', 25000, 'SOFA'], ['PACK-BACK', 'Separate Backrest Packing', 25000, 'SOFA'],
   ['DIVAN-COVER', 'Divan Fully Cover', 12500, 'BEDFRAME'], ['HB-COVER', 'HB Fully Cover', 12500, 'BEDFRAME'],
   ['DRAWER-L', 'Left Drawer', 25000, 'BEDFRAME'], ['DRAWER-R', 'Right Drawer', 25000, 'BEDFRAME'], ['DRAWER-F', 'Front Drawer', 25000, 'BEDFRAME'], ['HB-STRAIGHT', 'HB Straight', 25000, 'BEDFRAME'],
-].map(([code, label, sellingPriceSen, category], sortOrder) => ({ id: `demo-special-${code}`, code, label, sellingPriceSen, soDescription: label, costPriceSen: 0, categories: [category], optionGroups: [], active: true, sortOrder }));
+].map(([code, label, sellingPriceSen, category], sortOrder) => ({ id: `demo-special-${code}`, code, label, sellingPriceSen, soDescription: label, costPriceSen: 0, categories: [category], optionGroups: [],
+  // Detect by compartment: full fabric costs more on a sofa with a corner.
+  compartmentPrices: code === 'SOFA-FULL' ? [{ compartment: 'CNR', sellingPriceSen: 40000 }] : [],
+  active: true, sortOrder }));
 export const addons = [
   { id: 'dispose-mattress', label: 'Dispose old mattress', description: 'Remove one old mattress', price: 100, kind: 'qty', serviceSku: 'SVC-DISPOSE-MATTRESS', perFloorItem: null },
   { id: 'dispose-bedframe', label: 'Dispose old bedframe', description: 'Remove one old bedframe', price: 100, kind: 'qty', serviceSku: 'SVC-DISPOSE-BEDFRAME', perFloorItem: null },

@@ -85,7 +85,9 @@ import {
 } from '../components/BedframeOptions';
 import {
   SpecialAddonsPicker,
+  sofaBuildCompartments,
   specialSelsSurcharge,
+  specialSelsSurchargeFor,
   specialSelSurchargeRM,
   type SpecialSel,
 } from '../components/SpecialAddonsPicker';
@@ -890,7 +892,7 @@ export const Configurator = () => {
       setMattressSpecialSel((cfg.specialIds ?? []).map((code, i) => {
         const addon = mattressSpecialAddons.find((a) => a.code === code);
         const choices = cfg.specialChoices?.[code] ?? [];
-        return { id: code, label: addon?.label ?? cfg.specialLabels?.[i] ?? code, surcharge: addon ? specialSelSurchargeRM(addon, choices) : 0, choices };
+        return { id: code, label: addon?.label ?? cfg.specialLabels?.[i] ?? code, surcharge: addon ? specialSelSurchargeRM(addon, choices, null) : 0, choices };
       }));
       // PWP (换购) — re-arm the redemption if this line had it (mirror of the
       // bedframe branch below). Without this, editing a redeemed mattress
@@ -1023,10 +1025,11 @@ export const Configurator = () => {
         if (cfg.summary?.includes('L-facing')) setQuickFlip('L');
         else if (cfg.summary?.includes('R-facing')) setQuickFlip('R');
       }
+      const savedCompartments = sofaBuildCompartments(cfg.cells);
       setSofaSpecialSel((cfg.specialIds ?? []).map((code, i) => {
         const addon = sofaSpecialAddons.find((a) => a.code === code);
         const choices = cfg.specialChoices?.[code] ?? [];
-        return { id: code, label: addon?.label ?? cfg.specialLabels?.[i] ?? code, surcharge: addon ? specialSelSurchargeRM(addon, choices) : 0, choices };
+        return { id: code, label: addon?.label ?? cfg.specialLabels?.[i] ?? code, surcharge: addon ? specialSelSurchargeRM(addon, choices, savedCompartments) : 0, choices };
       }));
       setSofaLegValue(cfg.sofaLegHeight ?? null);
       setLineRemark(cfg.remark ?? '');
@@ -1976,7 +1979,10 @@ export const Configurator = () => {
   const sofaFabricDelta = fabricSel && addonCfgQ.data
     ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data, sofaModelFabricOverride)
     : 0;
-  const sofaSpecialDelta = specialSelsSurcharge(sofaSpecialSel);
+  // Priced on the Quick Pick's own cells — the cells its line stores — so an
+  // add-on priced by compartment matches Houzs. A preset bundle stores none.
+  const qpCompartments = sofaBuildCompartments(qpCells);
+  const sofaSpecialDelta = specialSelsSurchargeFor(sofaSpecialSel, sofaSpecialAddons, qpCompartments);
   // Sofa leg height — reuse the bedframe OptionSelect (same look). Options come
   // from the allowed ∩ priced pool; the chosen value's surcharge folds into the
   // live total + each cart line; the server reprices it from sofaLegHeights.
@@ -2585,7 +2591,7 @@ export const Configurator = () => {
             }
             pwpBlock={sofaPwpRailSection}
             specialAddonsBlock={
-              <SpecialAddonsPicker addons={sofaSpecialAddons} value={sofaSpecialSel} onChange={setSofaSpecialSel} />
+              <SpecialAddonsPicker addons={sofaSpecialAddons} value={sofaSpecialSel} onChange={setSofaSpecialSel} buildCompartments={qpCompartments} />
             }
             legBlock={sofaLegBlock}
             remarkBlock={
@@ -2614,6 +2620,9 @@ export const Configurator = () => {
             baseModel={p.base_model ?? undefined}
             modelId={(p as { model_id?: string | null }).model_id ?? null}
             pwpBlock={sofaPwpRailSection}
+            specialAddons={sofaSpecialAddons}
+            specialSel={sofaSpecialSel}
+            onSpecialSelChange={setSofaSpecialSel}
             legBlock={sofaLegBlock}
             legHeight={sofaLegValue}
             legSurchargeRm={sofaLegSurcharge}

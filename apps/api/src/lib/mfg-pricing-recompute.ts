@@ -283,8 +283,10 @@ export function recomputeFromSnapshot(
     variants.specialChoices && typeof variants.specialChoices === 'object'
       ? (variants.specialChoices as Record<string, string[]>)
       : null;
+  // No build compartments: 2990's special_addons has no compartment prices —
+  // "detect by compartment" (2026-10-26) lives on Houzs's table, which the POS uses.
   const specialsAddonPool = specialAddons
-    ? buildSpecialsPoolFromAddons(specialAddons, specials, specialChoices)
+    ? buildSpecialsPoolFromAddons(specialAddons, specials, specialChoices, null)
     : null;
   const effectiveConfig: MaintenanceConfig | null =
     specialsAddonPool && config
