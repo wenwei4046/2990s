@@ -27,6 +27,7 @@ const SalesOrderPrint = lazy(() => import('./pages/SalesOrderPrint').then((m) =>
 const Products = lazy(() => import('./pages/Products').then((m) => ({ default: m.Products })));
 const SalesOrderMaintenance = lazy(() => import('./pages/SalesOrderMaintenance').then((m) => ({ default: m.SalesOrderMaintenance })));
 const NewOrder = lazy(() => import('./pages/NewOrder').then((m) => ({ default: m.NewOrder })));
+const ItSupport = lazy(() => import('./pages/ItSupport').then((m) => ({ default: m.ItSupport })));
 const Marketing = lazy(() => import('./pages/Marketing').then((m) => ({ default: m.Marketing })));
 const OpexCommission = lazy(() => import('./pages/OpexCommission').then((m) => ({ default: m.OpexCommission })));
 
@@ -85,6 +86,8 @@ export const router = createBrowserRouter([
   /* WS2 (2026-05-31) — sales self-service PIN change. Inside AuthGate; the page
      itself bounces non-sales to /catalog (they have no PIN). */
   { path: '/change-pin', element: <AuthGate><ChangePin /></AuthGate> },
+  /* IT Support — report to the Houzs IT Hub; the page bounces off the Houzs target. */
+  { path: '/it-support', element: <AuthGate><ItSupport /></AuthGate> },
   { path: '/print/sales-order/:orderId', element: <AuthGate><SalesOrderPrint /></AuthGate> },
   /* PR — Commander 2026-05-28 ("把 Backend 的 Products 整个模块 port 到 POS").
      2026-06-01 — now wrapped in <MaintainGate>: only master-admin roles

@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
-import { ArrowLeft, Bookmark, KeyRound, ListOrdered, LogOut, ShoppingBag, Menu } from 'lucide-react';
+import { ArrowLeft, Bookmark, KeyRound, LifeBuoy, ListOrdered, LogOut, ShoppingBag, Menu } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useAuth } from '../lib/auth';
 import { useStaff } from '../lib/staff';
 import { useCanChangePin, useMarketingAccess } from '../lib/houzs-perms';
 import { useCart, cartItemCount, cartSubtotal } from '../state/cart';
 import { HouzsSsoMenu } from './HouzsSsoMenu';
+import { IS_HOUZS } from '../lib/apiClient';
 import { IS_SIMULATION } from '../lib/simulation-mode';
 import styles from './Topbar.module.css';
 
@@ -129,6 +130,11 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
             </span>
           </span>
         )}
+        {IS_HOUZS && (
+          <Link to="/it-support" className={styles.iconBtn} aria-label="IT Support" title="IT Support">
+            <LifeBuoy size={18} strokeWidth={1.75} />
+          </Link>
+        )}
         {canChangePin && (
           <Link to="/change-pin" className={styles.iconBtn} aria-label="Change PIN" title="Change PIN">
             <KeyRound size={18} strokeWidth={1.75} />
@@ -170,6 +176,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
             <Link to="/my-orders"><ListOrdered size={18} />My orders</Link>
             {mobileMenuSlot && <div className={styles.mobileMenuExtras}>{mobileMenuSlot}</div>}
             {!IS_SIMULATION && <div className={styles.mobileServiceMenu}><HouzsSsoMenu /></div>}
+            {IS_HOUZS && <Link to="/it-support"><LifeBuoy size={18} />IT Support</Link>}
             {canChangePin && <Link to="/change-pin"><KeyRound size={18} />Change PIN</Link>}
             <button type="button" onClick={() => void signOut()}><LogOut size={18} />Switch user</button>
           </nav>
