@@ -1,0 +1,56 @@
+/* ItSupport — reuses the SetPassword card look; adds the list/thread bits. */
+.shell { min-height: 100vh; background: var(--bg); padding: var(--space-5); display: flex; justify-content: center; }
+.col { width: min(640px, 100%); display: flex; flex-direction: column; gap: var(--space-4); }
+.head { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+.head h1 { margin: 0; }
+.back {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0;
+  background: none; border: 0; cursor: pointer; color: var(--fg-muted);
+  font-family: var(--font-sans); font-size: var(--fs-13); text-decoration: none;
+}
+.back:hover { color: var(--fg); }
+.back:focus-visible, .item:focus-visible { outline: 2px solid var(--c-orange); outline-offset: 2px; }
+
+.card {
+  background: var(--c-cream); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2); padding: var(--space-5);
+  display: flex; flex-direction: column; gap: var(--space-3);
+}
+.card h2, .card p { margin: 0; }
+.item { text-align: left; width: 100%; cursor: pointer; font: inherit; color: inherit; }
+.item:hover { border-color: var(--c-orange); }
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field input, .field textarea, .field select {
+  font-family: var(--font-sans); font-size: var(--fs-15); padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--c-paper); color: var(--fg); outline: none; min-height: 44px;
+  transition: border-color 120ms;
+}
+.field textarea { resize: vertical; }
+.field input:focus, .field textarea:focus, .field select:focus { border-color: var(--c-orange); }
+
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.code { font-family: ui-monospace, monospace; font-size: var(--fs-13); font-weight: 700; }
+.badge {
+  font-family: var(--font-sans); font-size: var(--fs-13); padding: 2px 10px;
+  border-radius: 999px; background: rgba(34, 31, 32, 0.08);
+}
+.title { font-weight: 600; overflow-wrap: anywhere; }
+.titleNew { font-weight: 800; overflow-wrap: anywhere; }
+.body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-15); }
+.step { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.hint { font-family: var(--font-sans); font-size: var(--fs-13); color: var(--fg-muted); }
+
+.files { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
+.chip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px;
+  border: 1px solid var(--line); border-radius: 999px; font-size: var(--fs-13); overflow-wrap: anywhere;
+}
+.chip button { min-width: 44px; min-height: 44px; border: 0; background: none; font-size: 18px; cursor: pointer; color: var(--fg); }
+
+.error {
+  padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm);
+  background: rgba(184, 51, 31, 0.08); color: var(--c-burnt);
+  font-family: var(--font-sans); font-size: var(--fs-13);
+}
