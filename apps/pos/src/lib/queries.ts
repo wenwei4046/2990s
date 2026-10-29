@@ -2237,6 +2237,7 @@ export interface SofaComboRow {
   baseModel: string;
   /** OR-set per slot: ordered slots, each an array of alternative codes. */
   modules: string[][];
+  accessories?: { modelId: string; qty: number }[];
   tier: SofaPriceTier | null;
   customerId: string | null;
   pricesByHeight: Record<string, number | null>;
@@ -2312,6 +2313,7 @@ export const useCreateSofaCombo = () => {
     mutationFn: async (body: {
       baseModel: string;       // '' allowed (wildcard)
       modules: string[][];     // OR-set per slot
+      accessories?: { modelId: string; qty: number }[];
       tier: SofaPriceTier | null;
       /** COST per height (centi). Optional — when omitted, the server
        *  auto-detects it = Σ the constituent module SKUs' costs (Master Admin
@@ -2326,12 +2328,14 @@ export const useCreateSofaCombo = () => {
       effectiveFrom: string;   // 'YYYY-MM-DD'
       notes?: string | null;
     }): Promise<SofaComboRow> => {
+      if (!IS_HOUZS && body.accessories?.length) throw new Error('Accessory combos require the Houzs POS pricing service.');
       // Houzs: the POS's own combo table (see sofa-combos-queries.ts COMBOS_PATH).
       const res = await authedFetchRaw(IS_HOUZS ? '/pos-pools/sofa-combos' : '/sofa-combos', {
         method: 'POST',
         body: JSON.stringify({
           baseModel: body.baseModel,
           modules: body.modules,
+          ...(body.accessories !== undefined ? { accessories: body.accessories } : {}),
           tier: body.tier,
           customerId: null,  // 2990 is B2C
           // Omit pricesByHeight when not set so the server auto-detects COST.
@@ -2369,6 +2373,7 @@ export interface SofaQuickPickRow {
   label: string | null;
   /** OR-set per slot (string[][]); the layout the salesperson taps to start. */
   modules: string[][];
+  layout?: import('./sofa-quick-pick-layout').SofaQuickPickLayout | null;
   depth: string;
   sortOrder: number;
   createdAt: string;
@@ -2415,14 +2420,19 @@ export const useCreateSofaQuickPick = () => {
     mutationFn: async (body: {
       baseModel: string;
       modules: string[][];   // OR-set per slot (a POS save = singleton slots)
+      layout?: import('./sofa-quick-pick-layout').SofaQuickPickLayout;
       depth: string;
       label?: string | null;
     }): Promise<SofaQuickPickRow> => {
+      if (!IS_HOUZS && body.layout?.accessories.length) {
+        throw new Error('This backend cannot save Quick Picks with sofa accessories. Switch to Houzs before saving this layout.');
+      }
       const res = await authedFetchRaw('/sofa-quick-picks', {
         method: 'POST',
         body: JSON.stringify({
           baseModel: body.baseModel,
           modules: body.modules,
+          ...(body.layout ? { layout: body.layout } : {}),
           depth: body.depth,
           label: body.label ?? null,
         }),

@@ -85,11 +85,14 @@ export function usePwpCodeSync(): void {
         for (const l of cart) {
           const c = l.config as {
             kind?: string; productId?: string; category?: string; modelId?: string | null;
-            pwp?: boolean; cells?: Array<{ moduleId?: string }>;
+            pwp?: boolean; cells?: Array<{ id?: string; moduleId?: string }>;
+            accessories?: Array<{ id: string; modelId: string; cellId: string }>;
           };
           if (!c.productId) continue;
           const isReward = c.pwp === true;
           let sofaModules: string[] | undefined;
+          let sofaCellIds: string[] | undefined;
+          let sofaAccessories: Array<{ id: string; modelId: string; cellId: string }> | undefined;
           let isTrigger = false;
           if (c.kind === 'sofa') {
             // By-Combo sofa trigger: send the build's module codes; the server
@@ -112,7 +115,10 @@ export function usePwpCodeSync(): void {
             if (hasSofaComboRule) {
               // Carry modules whenever a combo rule could apply, so a build that
               // satisfies BOTH a combo and a model rule reserves for both.
-              sofaModules = (c.cells ?? []).map((cell) => String(cell.moduleId ?? '')).filter(Boolean);
+              const cells = (c.cells ?? []).filter((cell) => !!cell.moduleId);
+              sofaModules = cells.map((cell) => String(cell.moduleId));
+              sofaCellIds = cells.map((cell) => cell.id ?? '');
+              sofaAccessories = (c.accessories ?? []).map(({ id, modelId, cellId }) => ({ id, modelId, cellId }));
             }
             isTrigger = hasSofaModelRule || (hasSofaComboRule && (sofaModules?.length ?? 0) > 0);
           } else {
@@ -131,11 +137,11 @@ export function usePwpCodeSync(): void {
             last.delete(l.key);
             continue;
           }
-          const sig = `${l.qty}:${isReward ? 'R' : ''}:${sofaModules ? sofaModules.join(',') : ''}`;
+          const sig = JSON.stringify([l.qty, isReward, sofaModules, sofaCellIds, sofaAccessories]);
           if (last.get(l.key) === sig) continue;
           await reserve.mutateAsync({
             cartLineKey: l.key, productId: c.productId, qty: l.qty, rewardLine: isReward,
-            ...(sofaModules ? { sofaModules } : {}),
+            ...(sofaModules ? { sofaModules, sofaCellIds, sofaAccessories } : {}),
           });
           mintedThisPass = true;
           last.set(l.key, sig);

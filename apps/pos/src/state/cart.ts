@@ -161,6 +161,8 @@ export interface FlatConfigSnapshot {
    *  Accessory); `total` is the exact selling price. */
   accessoryOfKey?: string;
   accessoryPerSofa?: number;
+  accessoryPieceIds?: string[];
+  accessoryIncludedInCombo?: boolean;
   modelId?: string | null;
   fabricId?: string;
   fabricLabel?: string;
@@ -332,7 +334,7 @@ export const isStandaloneAccessory = (c: CartConfig): boolean =>
   c.kind === 'flat' && c.category === 'FABRIC_ACCESSORY' && !c.accessoryOfKey;
 
 const accessoryLineKey = (sofaKey: string, a: AccessoryLine): string =>
-  `${sofaKey}~${a.modelId}~${a.fabric?.fabricId ?? ''}~${a.fabric?.colourId ?? ''}`;
+  `${sofaKey}~${a.modelId}~${a.fabric?.fabricId ?? ''}~${a.fabric?.colourId ?? ''}${a.includedInCombo ? '~combo' : ''}`;
 
 /** The snapshot of one Sofa Accessory × fabric, on a sofa or sold on its own:
  *  its SKU, the fabric its SO line needs and its exact selling price. A piece
@@ -370,7 +372,10 @@ export const sofaAccessoryConfig = (a: {
 export const sofaAccessoryLine = (sofaKey: string, sofaQty: number, a: AccessoryLine): CartLine => ({
   key: accessoryLineKey(sofaKey, a),
   qty: a.qtyPerSofa * Math.max(1, sofaQty),
-  config: { ...sofaAccessoryConfig(a), accessoryOfKey: sofaKey, accessoryPerSofa: a.qtyPerSofa },
+  config: { ...sofaAccessoryConfig(a), accessoryOfKey: sofaKey, accessoryPerSofa: a.qtyPerSofa,
+    ...(a.pieceIds ? { accessoryPieceIds: a.pieceIds } : {}),
+    ...(a.includedInCombo ? { accessoryIncludedInCombo: true, summary: `${sofaAccessoryConfig(a).summary} · Included in combo` } : {}),
+  },
 });
 
 const sanitizeQty = (config: CartConfig, qty: number | undefined, fallback = 1): number =>

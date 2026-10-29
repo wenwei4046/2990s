@@ -68,6 +68,26 @@ describe('cartLineToSoItem — Sofa Accessory', () => {
     expect(item.variants).toEqual({ fabricId: 'CG', fabricLabel: 'CG' });
   });
 
+  it('links combo pieces even with fabric pending without sending a trusted free-price marker', () => {
+    const item = cartLineToSoItem(accessory({
+      accessoryPieceIds: ['piece-1', 'piece-2'], accessoryIncludedInCombo: true,
+      total: 0, fabricId: undefined, fabricLabel: undefined, colourId: undefined,
+      colourLabel: undefined, colourHex: undefined,
+    }), new Map(), 'BC06');
+    expect(item.unitPriceSen).toBe(0);
+    expect(item.variants).toEqual({ sofaAccessoryOfKey: 'cfg-sofa', sofaAccessoryPieceIds: ['piece-1', 'piece-2'] });
+  });
+
+  it('sends the parent piece identities and attachments for authoritative combo verification', () => {
+    const item = cartLineToSoItem({ key: 'cfg-sofa', qty: 2, config: {
+      kind: 'sofa', productId: 'sofa', productName: 'Sofa', total: 2990, summary: '',
+      cells: [{ id: 'c', moduleId: '7FT', x: 0, y: 0, rot: 0 }],
+      accessories: [{ id: 'piece-1', modelId: 'bc06', cellId: 'c', slot: 0 }],
+    } }, new Map(), '8210-7FT');
+    expect(item.cartLineKey).toBe('cfg-sofa');
+    expect(item.variants?.sofaAccessories).toEqual([{ id: 'piece-1', modelId: 'bc06', cellId: 'c' }]);
+  });
+
   it('books a piece sold on its own the same way — its own qty, its fabric, the price to the sen', () => {
     const line: CartLine = {
       key: 'cfg-pillow',

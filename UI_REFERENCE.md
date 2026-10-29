@@ -168,6 +168,16 @@ When porting this to React + Vite + RR7:
 
 ## Approved deviations from prototype
 
+### Sofa accessories in Combo Price and Quick Pick · 30 October 2026
+
+Loo requested that sofa accessories placed on a custom sofa be saved with Add to
+Combo Price and Save as Quick Pick. Combo pricing includes the selected accessory
+Models and quantities; those pieces must not be charged a second time. Extra
+pieces remain individually priced. Both save dialogs identify the included
+pieces. Shared and personal Quick Picks restore their accessory placements and
+colours, show them in the preview, and use live prices. Separate accessory SKUs
+remain available for fulfilment.
+
 These are intentional changes from the prototype's current state. Anything not on this list is a regression and must be reverted to the prototype's behaviour.
 
 ### Customize · Add to Combo Price · 30 October 2026

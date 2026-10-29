@@ -15,6 +15,7 @@ import { buildComboLabel, type RuleTarget, type TargetRefinement, type RuleTarge
 import { useProductModels, type ProductModelRow } from '../../lib/products/product-models-queries';
 import { useSofaCombos, type SofaComboRule } from '../../lib/products/sofa-combos-queries';
 import { POS_PICKABLE_SIZE_CODES } from '../../lib/queries';
+import { ACCESSORY_COMBO_TARGET_NOTICE, supportsModuleOnlyComboTarget } from '../../lib/sofa-combo-rule-support';
 
 const CATEGORY_ORDER = ['SOFA', 'MATTRESS', 'BEDFRAME', 'ACCESSORY'];
 /** mfg size_code → display label. Unknown codes fall through to the raw code. */
@@ -140,6 +141,8 @@ export function RuleTargetRefinement({
 
   if (cat === 'SOFA') {
     const compartments = modelCompartments(model);
+    const eligibleCombos = combos.filter(supportsModuleOnlyComboTarget);
+    const unavailablePicked = combos.filter((combo) => !supportsModuleOnlyComboTarget(combo) && value.comboIds?.includes(combo.id));
     const mode: RuleTargetScope =
       value.scope === 'combo' || value.scope === 'compartment' ? value.scope : 'model';
     return (
@@ -156,12 +159,12 @@ export function RuleTargetRefinement({
           }}
         >
           <option value="model">Any build</option>
-          {combos.length > 0 && <option value="combo">By combo</option>}
+          {(eligibleCombos.length > 0 || mode === 'combo') && <option value="combo">By combo</option>}
           {compartments.length > 0 && <option value="compartment">By compartment</option>}
         </select>
         {mode === 'combo' && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {combos.map((cb) => {
+            {eligibleCombos.map((cb) => {
               const on = (value.comboIds ?? []).includes(cb.id);
               return (
                 <button key={cb.id} type="button" style={chipStyle(on)}
@@ -170,7 +173,21 @@ export function RuleTargetRefinement({
                 </button>
               );
             })}
+            {unavailablePicked.map((cb) => (
+              <button key={cb.id} type="button" style={chipStyle(true)}
+                onClick={() => {
+                  const remaining = (value.comboIds ?? []).filter((id) => id !== cb.id);
+                  onChange(remaining.length ? { scope: 'combo', comboIds: remaining } : { scope: 'model' });
+                }}>
+                Remove {comboLabel(cb)} (unavailable)
+              </button>
+            ))}
           </div>
+        )}
+        {eligibleCombos.length < combos.length && (
+          <span style={{ flexBasis: '100%', fontSize: 'var(--fs-11)', color: 'var(--fg-soft)' }}>
+            {ACCESSORY_COMBO_TARGET_NOTICE}
+          </span>
         )}
         {mode === 'compartment' && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>

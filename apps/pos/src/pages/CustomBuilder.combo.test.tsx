@@ -4,6 +4,8 @@ import '@testing-library/jest-dom/vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ComponentProps } from 'react';
 import type { Cell, SofaProductPricing } from '@2990s/shared';
+import { useCart } from '../state/cart';
+import type { SofaAccessoryOption, PlacedAccessory } from '../lib/sofa-accessories';
 import type { SofaComboRule } from '../lib/products/sofa-combos-queries';
 
 const state = vi.hoisted(() => ({
@@ -19,6 +21,8 @@ const state = vi.hoisted(() => ({
   },
   readCombos: vi.fn(),
   create: vi.fn(),
+  saveShared: vi.fn(),
+  savePersonal: vi.fn(),
 }));
 
 vi.mock('../lib/supabase', () => ({ supabase: {} }));
@@ -35,7 +39,9 @@ vi.mock('../lib/houzs-perms', () => ({
 vi.mock('../lib/queries', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/queries')>()),
   useCreateSofaCombo: () => ({ mutateAsync: state.create, isPending: false }),
+  useCreateSofaQuickPick: () => ({ mutateAsync: state.saveShared, isPending: false }),
 }));
+vi.mock('../lib/personal-quick-picks', () => ({ useAddPersonalQuickPick: () => ({ mutateAsync: state.savePersonal, isPending: false }) }));
 vi.mock('../lib/products/sofa-combos-queries', () => ({
   useSofaCombos: (filters: unknown) => {
     state.readCombos(filters);
@@ -78,6 +84,9 @@ beforeEach(() => {
   state.combos.refetch.mockReset();
   state.readCombos.mockClear();
   state.create.mockReset().mockResolvedValue({ id: 'new-combo' });
+  state.saveShared.mockReset().mockResolvedValue({ id: 'shared' });
+  state.savePersonal.mockReset().mockResolvedValue({ id: 'personal' });
+  useCart.setState({ lines: [] });
 });
 afterEach(() => {
   cleanup();
@@ -254,5 +263,56 @@ describe('Customize · Add to Combo Price', () => {
     expect(within(dialog).getByRole('spinbutton', { name: 'Selling price at 24 inches' })).toHaveValue(2990);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create combo' }));
     await waitFor(() => expect(state.create).toHaveBeenCalledTimes(2));
+  });
+});
+
+const cushion: SofaAccessoryOption = { modelId: 'bc06', productId: 'sku-bc06', code: 'BC06', name: 'Back cushion', role: 'back', priceSen: 25025, armWidthCm: 20 };
+const pieces: PlacedAccessory[] = [
+  { id: 'p1', modelId: 'bc06', cellId: 'a', slot: 0 },
+  { id: 'p2', modelId: 'bc06', cellId: 'b', slot: 0 },
+];
+const withAccessories: Partial<Props> = {
+  initialAccessories: pieces,
+  modelCustomizer: { compartments: [], sellingRows: [], sizes: ['24'], legHeights: [], specials: [], fabricIds: [], accessories: [cushion], accessoriesNeeded: [], modelId: 'model', modelName: 'TANNAH', modelCode: 'TANNAH' },
+};
+
+describe('sofa accessories saved and priced with the sofa', () => {
+  it('seeds and saves the whole sofa + accessory package, keeping its quantities', async () => {
+    const dialog = mount(withAccessories).open();
+    expect(within(dialog).getByRole('spinbutton', { name: 'Selling price at 24 inches' })).toHaveValue(3653.13);
+    expect(within(dialog).getByText(/Included sofa accessories:/)).toHaveTextContent('BC06 × 2');
+    fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'Selling price at 24 inches' }), { target: { value: '3300.25' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create combo' }));
+    await waitFor(() => expect(state.create).toHaveBeenCalledOnce());
+    expect(state.create.mock.calls[0]![0]).toMatchObject({ accessories: [{ modelId: 'bc06', qty: 2 }], sellingPricesByHeight: { '24': 330025 } });
+  });
+
+  it.each(['sales_director', 'sales'])('saves the exact accessory layout for %s', async (role) => {
+    state.role = role;
+    const view = mount(withAccessories);
+    fireEvent.click(within(view.container.querySelector('footer')!).getByRole('button', { name: 'Save as Quick Pick' }));
+    const dialog = screen.getByRole('dialog', { name: 'Save as Quick Pick' });
+    fireEvent.click(within(dialog).getByRole('button', { name: role === 'sales' ? 'Save to “Yours”' : 'Save to shared' }));
+    const save = role === 'sales' ? state.savePersonal : state.saveShared;
+    await waitFor(() => expect(save).toHaveBeenCalledOnce());
+    expect(save.mock.calls[0]![0].layout).toEqual({ cells: closedCells(), accessories: pieces });
+  });
+
+  it('charges covered pieces once and leaves extra pieces at their exact selling price', () => {
+    const pricing: SofaProductPricing = { ...PRICING, baseModel: 'TANNAH', fabricTier: 'PRICE_1', combos: [{
+      id: 'package', baseModel: 'TANNAH', modules: [['1A(LHF)'], ['2A(RHF)']], accessories: [{ modelId: 'bc06', qty: 1 }],
+      customerId: null, tier: 'PRICE_1', pricesByHeight: { '24': 300025 }, effectiveFrom: '2020-01-01',
+    }] };
+    mount({ ...withAccessories, pricing });
+    fireEvent.click(screen.getByRole('button', { name: 'Add to cart' }));
+    const lines = useCart.getState().lines;
+    expect(lines).toHaveLength(3);
+    expect(lines[0]!.config.total).toBe(3000.25);
+    expect(lines.slice(1).map((line) => [line.qty, line.config.total])).toEqual([[1, 0], [1, 250.25]]);
+    expect(lines.reduce((sum, line) => sum + line.qty * line.config.total, 0)).toBe(3250.5);
+    useCart.getState().setQty(lines[0]!.key, 2);
+    expect(useCart.getState().lines.reduce((sum, line) => sum + line.qty * line.config.total, 0)).toBe(6501);
+    useCart.getState().remove(lines[0]!.key);
+    expect(useCart.getState().lines).toHaveLength(0);
   });
 });

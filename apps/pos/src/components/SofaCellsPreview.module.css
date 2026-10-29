@@ -1,0 +1,17 @@
+.accessory {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.4px solid #2C2C2A;
+  border-radius: 6px;
+  z-index: 3;
+  pointer-events: none;
+}
+.back { background: #E9DAC1; }
+.support { background: #DCC7A6; border-radius: 4px; }
+.arm { background: #CDB38D; border-radius: 8px; }
+.seam {
+  position: absolute;
+  inset: 3px;
+  border: 1px dashed rgba(44, 44, 42, 0.45);
+  border-radius: inherit;
+}

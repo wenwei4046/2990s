@@ -675,6 +675,7 @@ function HistoryModal({ rule, heights, onClose }: { rule: SofaComboRule; heights
   const historyQ = useSofaComboHistory({
     baseModel: rule.baseModel,
     modules: rule.modules,
+    accessories: rule.accessories,
     tier: rule.tier,
     customerId: rule.customerId,
   });
