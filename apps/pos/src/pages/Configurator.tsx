@@ -276,6 +276,12 @@ export const Configurator = () => {
     else navigate('/catalog');
   };
   const product = useProduct(productId);
+  // Wait for the product kind before fetching options for another category.
+  // In particular, a sofa never needs the bedframe pools or sibling size SKUs.
+  const pricingKind = product.data?.pricing_kind;
+  const bedframeProductId = pricingKind === 'bedframe_build' ? productId : undefined;
+  const sizedProductId = pricingKind === 'bedframe_build' || pricingKind === 'size_variants' ? productId : undefined;
+  const fabricOptionsProductId = pricingKind === 'bedframe_build' || product.data?.category_id === 'fabric_accessory' ? productId : undefined;
   const bundles = useProductBundles(productId);
   const compartments = useProductCompartments(productId);
   const productFabrics = useProductFabrics(productId);
@@ -330,7 +336,7 @@ export const Configurator = () => {
 
   // Bedframe enabled fabric colour codes = the Model's allowed_options.fabrics
   // (per-Model, set in the Modular drawer). Empty → "No fabrics enabled".
-  const bedframeAllowedFabricsQ = useModelAllowedFabricCodes(productId);
+  const bedframeAllowedFabricsQ = useModelAllowedFabricCodes(fabricOptionsProductId);
   const bedframeFabricCodes = useMemo(() => bedframeAllowedFabricsQ.data ?? [], [bedframeAllowedFabricsQ.data]);
   const bedframeFabricRows = useMemo<ProductFabricRow[]>(
     () => buildFabricSeriesRows(bedframeFabricCodes),
@@ -401,7 +407,7 @@ export const Configurator = () => {
   const [sofaSpecialSel, setSofaSpecialSel] = useState<SpecialSel[]>([]);
   const [mattressSpecialSel, setMattressSpecialSel] = useState<SpecialSel[]>([]);
 
-  const sizes = useProductSizes(productId);
+  const sizes = useProductSizes(sizedProductId);
   const sizeLib = useSizeLibrary();
   const addons = useAddons();
   /* Commander 2026-05-28 — Sofa Combo Pricing from Backend surfaces in
@@ -410,11 +416,13 @@ export const Configurator = () => {
      base_model comes from the useProduct mfg fallback path (added
      2026-05-28). Null/undefined → no filter → shows all combos (safe
      fallback for legacy UUID products that don't have a base_model). */
-  const sofaCombosQ = useSofaCombos(product.data?.base_model);
+  const sofaCombosQ = useSofaCombos(product.data?.base_model, { enabled: pricingKind === 'sofa_build' });
   // Quick Picks (Phase 5) — saved LAYOUTS the salesperson taps to start.
   // GLOBAL layer (Master-Admin-curated, shared) + PERSONAL "Yours" (per-device).
   // Combos stay invisible: they auto-apply via the engine on module match.
-  const globalQPsQ = useSofaQuickPicks(product.data?.base_model);
+  const globalQPsQ = useSofaQuickPicks(product.data?.base_model, {
+    enabled: pricingKind === 'sofa_build' && !!product.data?.base_model,
+  });
   useSofaQuickPicksRealtime();
   const deleteGlobalQP = useDeleteSofaQuickPick();
   // Personal Quick Picks are now DB-backed (WS1) so they follow the salesperson
@@ -653,8 +661,8 @@ export const Configurator = () => {
   // Bedframe colour + option libraries (also used by <BedframeOptions>; React
   // Query dedupes). The parent needs them to rebuild bfSel labels + surcharges
   // when editing a bedframe line.
-  const bedframeColours = useBedframeColours(productId);
-  const bedframeOptions = useBedframeCustomizerData(productId);
+  const bedframeColours = useBedframeColours(bedframeProductId);
+  const bedframeOptions = useBedframeCustomizerData(bedframeProductId);
   // Special Add-ons (migration 0134) — the Model's allowed codes ∩ the active
   // BEDFRAME add-ons. Drives the BedframeOptions picker + edit-hydration. These
   // hooks MUST stay above the `if (product.isLoading) return` guard below
@@ -3400,6 +3408,8 @@ const useSilhouetteBounds = (src: string): SilhouetteBounds | null => {
     () => silhouetteBoundsCache.get(src) ?? null,
   );
   useEffect(() => {
+    // Composed and saved layouts render their own cells and have no hero PNG.
+    if (!src) return;
     const cached = silhouetteBoundsCache.get(src);
     if (cached) {
       setBounds(cached);

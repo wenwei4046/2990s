@@ -60,8 +60,13 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
   // Re-render once each module's silhouette bbox has been measured.
   const [, bump] = useState(0);
   useEffect(() => {
+    // Cached geometry is already used by this render. Parent updates often
+    // supply a new cells array; do not schedule a second render for every card
+    // when none of its image bounds can change.
+    const srcs = Array.from(new Set(cells.map((c) => artSrc(c.moduleId))))
+      .filter((src) => !getCachedArtBbox(src));
+    if (srcs.length === 0) return;
     let live = true;
-    const srcs = Array.from(new Set(cells.map((c) => artSrc(c.moduleId))));
     void Promise.all(srcs.map(measureArtBbox)).then(() => { if (live) bump((n) => n + 1); });
     return () => { live = false; };
   }, [cells, artSrc]);

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
 import { comboChargedPrices, maintActiveValues, type MfgSeatHeightPrice, type DefaultFreeGift, type FreeItemEligibility, type FreeItemCampaign, type RuleTarget } from '@2990s/shared';
 import { authedFetch, authedFetchRaw, API_URL, IS_HOUZS, HOUZS_COMPANY_ID, houzsApiRoot, posApiBase } from './apiClient';
@@ -15,10 +15,9 @@ import {
 
 /* ─── Houzs seam helpers (P4.3) ───────────────────────────────────────────
  * The configurator resolves a SKU (mfg_products.id) → its Model's
- * allowed_options (the Modular ON/OFF gate). On Houzs there is no embedded
- * PostgREST join; instead we compose the two documented list endpoints:
- *   GET /mfg-products   → { products:[{ id, model_id }] }   (SKU → model_id)
- *   GET /product-models → { models:[{ id, allowed_options }] } (model → gate)
+ * allowed_options (the Modular ON/OFF gate). The selling-only POS catalog
+ * endpoint includes the joined model, so one scoped SKU read serves every
+ * picker without downloading the two complete admin lists.
  * allowed_options is a pure GATE (which options may be offered), never a
  * price, so this resolution touches no pricing math. */
 export type MfgAllowedOptions = {
@@ -32,16 +31,23 @@ export type MfgAllowedOptions = {
   compartments?:  string[];
 };
 
-async function fetchModelAllowedOptions(productId: string): Promise<MfgAllowedOptions | null> {
-  const { products } = await authedFetch<{ products: Array<{ id: string; model_id: string | null }> }>(
-    '/mfg-products',
-  );
-  const modelId = (products ?? []).find((p) => p.id === productId)?.model_id ?? null;
-  if (!modelId) return null;
-  const { models } = await authedFetch<{ models: Array<{ id: string; allowed_options: MfgAllowedOptions | null }> }>(
-    '/product-models',
-  );
-  return (models ?? []).find((m) => m.id === modelId)?.allowed_options ?? null;
+async function fetchModelAllowedOptions(productId: string, qc: QueryClient): Promise<MfgAllowedOptions | null> {
+  // The selling-only catalog endpoint already joins the model. Loading both
+  // complete admin lists made every fabric/leg/special picker repeat two requests.
+  const sku = (await fetchMfgCatalog({ id: productId }, qc))[0];
+  const model = Array.isArray(sku?.product_models) ? sku.product_models[0] : sku?.product_models;
+  return model?.allowed_options ?? null;
+}
+
+function fetchMasterMaintenance(qc: QueryClient): Promise<MaintenanceResolved> {
+  // Use the same cache as useMaintenanceConfig, including its mutation
+  // invalidation, so each picker does not download the master pool again.
+  return qc.fetchQuery({
+    queryKey: ['maintenance-config', 'resolved', 'master'],
+    queryFn: () => authedFetch<MaintenanceResolved>('/maintenance-config/resolved?scope=master'),
+    staleTime: 30_000,
+    retry: false,
+  });
 }
 
 /* ─── POS-catalog SKU read (P4.3) ─────────────────────────────────────────
@@ -89,10 +95,23 @@ export interface MfgCatalogApiRow {
   } | null;
 }
 
-export async function fetchMfgCatalog(params?: Record<string, string>): Promise<MfgCatalogApiRow[]> {
+export async function fetchMfgCatalog(params?: Record<string, string>, qc?: QueryClient): Promise<MfgCatalogApiRow[]> {
   const qs = params && Object.keys(params).length > 0 ? `?${new URLSearchParams(params).toString()}` : '';
-  const { products } = await authedFetch<{ products: MfgCatalogApiRow[] }>(`/pos-pools/mfg-catalog${qs}`);
-  return products ?? [];
+  const fetchRows = async () => {
+    const { products } = await authedFetch<{ products: MfgCatalogApiRow[] }>(`/pos-pools/mfg-catalog${qs}`);
+    return products ?? [];
+  };
+  if (!qc) return fetchRows();
+  // Share simultaneous SKU reads across configurator hooks, without introducing
+  // another freshness window below their existing polling/invalidation rules.
+  // Scoping to the QueryClient also keeps this out of module-global auth state.
+  return qc.fetchQuery({
+    queryKey: ['mfg-catalog-request', params ?? {}],
+    queryFn: fetchRows,
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+  });
 }
 
 export interface CatalogProduct {
@@ -147,10 +166,85 @@ export interface ProductBundleRow { bundleId: string; active: boolean; price: nu
 export interface ProductCompartmentRow { compartmentId: string; active: boolean; price: number }
 export interface ProductSizeRow { sizeId: string; active: boolean; price: number; pwpPrice: number | null }
 
-export const useProduct = (productId: string | undefined) =>
-  useQuery({
+function productFromMfgRow(mfg: MfgCatalogApiRow) {
+  const pricingKind: 'sofa_build' | 'bedframe_build' | 'size_variants' | 'flat' =
+    mfg.category === 'SOFA'     ? 'sofa_build'     :
+    mfg.category === 'BEDFRAME' ? 'bedframe_build' :
+    mfg.category === 'MATTRESS' ? 'size_variants'  :
+                                   'flat';
+
+  // Synthesise a row shape matching the products select() above so
+  // downstream code that reads `product.data?.foo` keeps working.
+  // base_price_sen is in sen (cents); flat_price expects ringgit
+  // (legacy schema uses whole-RM integers — see CLAUDE.md "Money").
+  return {
+    id: mfg.id,
+    sku: mfg.code,
+    name: mfg.name,
+    detail: mfg.description,
+    size_display: mfg.size_label,
+    img_key: null,
+    thumb_key: null,
+    // Widen to the full CatalogProduct union (this map never yields 'tbc',
+    // but before the legacy retail branch was removed the return type carried
+    // 'tbc' from the `products` row, and Configurator still switches on it).
+    pricing_kind: pricingKind as CatalogProduct['pricing_kind'],
+    // ACCESSORY is flat + has no variants; Loo wants even an unpriced (null)
+    // or RM 0 accessory to be sellable in POS. Treat null as 0 so the
+    // Configurator's FlatAddToCart renders (its gate is flat_price != null)
+    // and the line books at RM 0. Server reprice has no authoritative figure
+    // for a 0-base accessory → trusts the submitted 0 (no drift). Other flat
+    // categories (legacy / SERVICE) keep null = "no price yet".
+    flat_price:
+      mfg.sell_price_sen != null
+        ? Math.round(mfg.sell_price_sen / 100)
+        : mfg.category === 'ACCESSORY' ? 0 : null,
+    /* The exact selling price, unrounded — a Sofa Accessory sold on its own
+       books it to the sen (Houzs re-prices the line from this field and
+       refuses a 0.5% drift; RM 39.50 → 40 is 1.3%). lib/sofa-accessories.ts. */
+    sell_price_sen: mfg.sell_price_sen,
+    /* The Model's allowed_options — whether a Sofa Accessory goes on the sofa
+       (on_sofa) and the fabrics it ticks. */
+    model_allowed_options:
+      (Array.isArray(mfg.product_models) ? mfg.product_models[0] : mfg.product_models)?.allowed_options ?? null,
+    recliner_upgrade_price: 0,
+    seat_upgrade_label: null,
+    seat_upgrade_footrest: true,
+    depth_options: null,
+    stock: 0,
+    low_at: 0,
+    visible: true,
+    /* BUGFIX 2026-05-28: the Configurator topbar chip does
+       `p.category_id.toUpperCase()` — a null here crashed the whole
+       configure route ("Cannot read properties of null (reading
+       'toUpperCase')"). Stamp the lowercased mfg category so the chip
+       reads e.g. "BOOQIT · SOFA". */
+    category_id: mfg.category ? mfg.category.toLowerCase() : null,
+    /* base_model is needed by Configurator so it can pass it to
+       useSofaCombos() and filter Quick Pick combos to this Model. */
+    base_model: mfg.base_model,
+    /* model_id (product_models.id) — used by the PWP (换购) eligibility check
+       to match this product against a rule's eligible model lists (0128). */
+    model_id: mfg.model_id,
+    series_id: null,
+    included_addons: mfg.included_addons ?? [],
+    updated_at: new Date().toISOString(),
+  };
+}
+
+export const useProduct = (productId: string | undefined) => {
+  const qc = useQueryClient();
+  return useQuery({
     enabled: !!productId,
     queryKey: ['product', productId],
+    staleTime: 30_000,
+    initialData: () => {
+      const catalog = qc.getQueryState<MfgCatalogRow[]>(['mfg-catalog']);
+      if (catalog?.isInvalidated) return undefined;
+      const row = catalog?.data?.find((r) => r.id === productId)?.sourceRow;
+      return row ? productFromMfgRow(row) : undefined;
+    },
+    initialDataUpdatedAt: () => qc.getQueryState(['mfg-catalog'])?.dataUpdatedAt,
     // Houzs has NO realtime — poll in place of the `product-pricing` channel.
     refetchInterval: 30_000,
     queryFn: async () => {
@@ -179,74 +273,13 @@ export const useProduct = (productId: string | undefined) =>
          GET /pos-pools/mfg-catalog?id= (any status/pos_active). SELLING only —
          the endpoint never emits a cost, so flat_price derives from
          sell_price_sen alone (no base_price_sen fallback, #625 cost strip). */
-      const mfg = (await fetchMfgCatalog({ id: productId }))[0] ?? null;
+      const mfg = (await fetchMfgCatalog({ id: productId }, qc))[0] ?? null;
       if (!mfg) throw new Error('not_found');
 
-      const pricingKind: 'sofa_build' | 'bedframe_build' | 'size_variants' | 'flat' =
-        mfg.category === 'SOFA'     ? 'sofa_build'     :
-        mfg.category === 'BEDFRAME' ? 'bedframe_build' :
-        mfg.category === 'MATTRESS' ? 'size_variants'  :
-                                       'flat';
-
-      // Synthesise a row shape matching the products select() above so
-      // downstream code that reads `product.data?.foo` keeps working.
-      // base_price_sen is in sen (cents); flat_price expects ringgit
-      // (legacy schema uses whole-RM integers — see CLAUDE.md "Money").
-      return {
-        id: mfg.id,
-        sku: mfg.code,
-        name: mfg.name,
-        detail: mfg.description,
-        size_display: mfg.size_label,
-        img_key: null,
-        thumb_key: null,
-        // Widen to the full CatalogProduct union (this map never yields 'tbc',
-        // but before the legacy retail branch was removed the return type carried
-        // 'tbc' from the `products` row, and Configurator still switches on it).
-        pricing_kind: pricingKind as CatalogProduct['pricing_kind'],
-        // ACCESSORY is flat + has no variants; Loo wants even an unpriced (null)
-        // or RM 0 accessory to be sellable in POS. Treat null as 0 so the
-        // Configurator's FlatAddToCart renders (its gate is flat_price != null)
-        // and the line books at RM 0. Server reprice has no authoritative figure
-        // for a 0-base accessory → trusts the submitted 0 (no drift). Other flat
-        // categories (legacy / SERVICE) keep null = "no price yet".
-        flat_price:
-          mfg.sell_price_sen != null
-            ? Math.round(mfg.sell_price_sen / 100)
-            : mfg.category === 'ACCESSORY' ? 0 : null,
-        /* The exact selling price, unrounded — a Sofa Accessory sold on its own
-           books it to the sen (Houzs re-prices the line from this field and
-           refuses a 0.5% drift; RM 39.50 → 40 is 1.3%). lib/sofa-accessories.ts. */
-        sell_price_sen: mfg.sell_price_sen,
-        /* The Model's allowed_options — whether a Sofa Accessory goes on the sofa
-           (on_sofa) and the fabrics it ticks. */
-        model_allowed_options:
-          (Array.isArray(mfg.product_models) ? mfg.product_models[0] : mfg.product_models)?.allowed_options ?? null,
-        recliner_upgrade_price: 0,
-        seat_upgrade_label: null,
-        seat_upgrade_footrest: true,
-        depth_options: null,
-        stock: 0,
-        low_at: 0,
-        visible: true,
-        /* BUGFIX 2026-05-28: the Configurator topbar chip does
-           `p.category_id.toUpperCase()` — a null here crashed the whole
-           configure route ("Cannot read properties of null (reading
-           'toUpperCase')"). Stamp the lowercased mfg category so the chip
-           reads e.g. "BOOQIT · SOFA". */
-        category_id: mfg.category ? mfg.category.toLowerCase() : null,
-        /* base_model is needed by Configurator so it can pass it to
-           useSofaCombos() and filter Quick Pick combos to this Model. */
-        base_model: mfg.base_model,
-        /* model_id (product_models.id) — used by the PWP (换购) eligibility check
-           to match this product against a rule's eligible model lists (0128). */
-        model_id: mfg.model_id,
-        series_id: null,
-        included_addons: mfg.included_addons ?? [],
-        updated_at: new Date().toISOString(),
-      };
+      return productFromMfgRow(mfg);
     },
   });
+};
 
 /* ─── Add-ons (used by Configurator's PILLOWS + ADD-ON sections) ───── */
 
@@ -534,32 +567,36 @@ export const useFabricColours = () =>
 // ticked in the Modular drawer). Sofa reads them off useSofaCustomizerData;
 // this hook is the bedframe (and any-category) equivalent, joining mfg_products
 // → product_models. Returns [] for legacy UUID products (no Model link).
-export const useModelAllowedFabricCodes = (productId: string | undefined) =>
-  useQuery({
+export const useModelAllowedFabricCodes = (productId: string | undefined) => {
+  const qc = useQueryClient();
+  return useQuery({
     enabled: !!productId,
     queryKey: ['model-allowed-fabrics', productId],
     queryFn: async (): Promise<string[]> => {
       if (!productId || !productId.startsWith('mfg-')) return [];
-      const allowed = await fetchModelAllowedOptions(productId);
+      const allowed = await fetchModelAllowedOptions(productId, qc);
       return allowed?.fabrics ?? [];
     },
   });
+};
 
 // Enabled Special Add-on CODES for a Model (allowed_options.specials — the codes
 // ticked in the Modular drawer). The configurator filters its Special Add-ons to
 // these so a picked code is always allowed (the server gate validates the same
 // list). Returns [] for legacy UUID products (no Model link) → no add-ons shown.
-export const useModelAllowedSpecials = (productId: string | undefined) =>
-  useQuery({
+export const useModelAllowedSpecials = (productId: string | undefined) => {
+  const qc = useQueryClient();
+  return useQuery({
     enabled: !!productId,
     queryKey: ['model-allowed-specials', productId],
     staleTime: 60_000,
     queryFn: async (): Promise<string[]> => {
       if (!productId || !productId.startsWith('mfg-')) return [];
-      const allowed = await fetchModelAllowedOptions(productId);
+      const allowed = await fetchModelAllowedOptions(productId, qc);
       return allowed?.specials ?? [];
     },
   });
+};
 
 // Per-Model fabric availability + surcharge.
 // mfg-{12hex} products have no rows in product_fabrics (UUID FK). Their
@@ -667,8 +704,9 @@ export const useBedframeOptions = () =>
  * unchanged. Legacy (non-mfg) products have no Model link → no restriction. */
 type CfgPricedOption = { value: string; priceSen?: number; sellingPriceSen?: number };
 
-export const useBedframeCustomizerData = (productId: string | undefined) =>
-  useQuery({
+export const useBedframeCustomizerData = (productId: string | undefined) => {
+  const qc = useQueryClient();
+  return useQuery({
     enabled: !!productId,
     queryKey: ['bedframe-customizer-data', productId],
     staleTime: 30_000,
@@ -679,15 +717,13 @@ export const useBedframeCustomizerData = (productId: string | undefined) =>
       // no Model link → empty = no restriction, same as the old global pool).
       let allowed: { gaps?: string[]; leg_heights?: string[]; divan_heights?: string[] } = {};
       if (productId.startsWith('mfg-')) {
-        allowed = (await fetchModelAllowedOptions(productId)) ?? {};
+        allowed = (await fetchModelAllowedOptions(productId, qc)) ?? {};
       }
 
       // Master maintenance config = the POS Master-Admin Special Add-ons pool.
       // Houzs GET /maintenance-config/resolved?scope=master → { data, ... };
       // `data` IS the resolved config blob (same as the old history `config`).
-      const resolved = await authedFetch<MaintenanceResolved>(
-        '/maintenance-config/resolved?scope=master',
-      );
+      const resolved = await fetchMasterMaintenance(qc);
       const cfg = (resolved?.data ?? {}) as unknown as {
         gaps?: Array<string | CfgPricedOption>;
         legHeights?: CfgPricedOption[];
@@ -734,6 +770,7 @@ export const useBedframeCustomizerData = (productId: string | undefined) =>
       return rows;
     },
   });
+};
 
 export interface SofaLegOption { value: string; surcharge: number }
 
@@ -744,8 +781,9 @@ export interface SofaLegOption { value: string; surcharge: number }
  * computeMfgLinePrice(sofaLegHeights) + gates sofaLegHeight against leg_heights,
  * so POS and server stay in lockstep. surcharge (RM) = sellingPriceSen / 100.
  * Empty allowed pool = no restriction; legacy (non-mfg) = no restriction. */
-export const useSofaLegHeights = (productId: string | undefined) =>
-  useQuery({
+export const useSofaLegHeights = (productId: string | undefined) => {
+  const qc = useQueryClient();
+  return useQuery({
     enabled: !!productId,
     queryKey: ['sofa-leg-heights', productId],
     staleTime: 30_000,
@@ -757,7 +795,7 @@ export const useSofaLegHeights = (productId: string | undefined) =>
       // allowedLegs === [...]   → offer exactly those legs
       let allowedLegs: string[] | null = null;
       if (productId.startsWith('mfg-')) {
-        const ao = await fetchModelAllowedOptions(productId);
+        const ao = await fetchModelAllowedOptions(productId, qc);
         // Empty-semantics (owner 2026-06-16): the leg_heights KEY being ABSENT
         // means "unconfigured → offer ALL legs" (sensible default for a brand-new
         // Model). The key being PRESENT — even as [] — means it was explicitly
@@ -770,9 +808,7 @@ export const useSofaLegHeights = (productId: string | undefined) =>
       }
 
       // Houzs GET /maintenance-config/resolved?scope=master → { data, ... }.
-      const resolved = await authedFetch<MaintenanceResolved>(
-        '/maintenance-config/resolved?scope=master',
-      );
+      const resolved = await fetchMasterMaintenance(qc);
       const list = ((resolved?.data ?? {}) as unknown as { sofaLegHeights?: CfgPricedOption[] }).sofaLegHeights ?? [];
       // null → no gate (all); [] → empty gate (none); [...] → that subset.
       const gate = allowedLegs === null ? null : new Set(allowedLegs);
@@ -783,6 +819,7 @@ export const useSofaLegHeights = (productId: string | undefined) =>
         .map((o) => ({ value: o.value, surcharge: Math.round(o.sellingPriceSen ?? 0) / 100 }));
     },
   });
+};
 
 /** Maps HOOKKA mfg_products.size_code → size_library.id (seeded in seed-libraries.sql).
  *  Only the 4 standard bed sizes have library entries at MVP; SK/SP/7FT etc. are ignored
@@ -806,8 +843,9 @@ export const sizeIdToMfgCode = (sizeId: string | null | undefined): string | nul
  *  RuleTargetPicker only offers these to avoid that dead/confusing config. */
 export const POS_PICKABLE_SIZE_CODES: ReadonlySet<string> = new Set(Object.keys(MFG_SIZE_CODE_TO_LIB));
 
-export const useProductSizes = (productId: string | undefined) =>
-  useQuery({
+export const useProductSizes = (productId: string | undefined) => {
+  const qc = useQueryClient();
+  return useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'sizes'],
     refetchInterval: 30_000,   // Houzs poll (replaces product-pricing channel)
@@ -839,7 +877,7 @@ export const useProductSizes = (productId: string | undefined) =>
       // (INACTIVE) but pos_active sibling is KEPT and greyed here, never dropped.
       // SELLING-only (no base_price_sen leaves the endpoint, #625 cost strip).
       if (productId.startsWith('mfg-')) {
-        const mfgRow = (await fetchMfgCatalog({ id: productId }))[0] ?? null;
+        const mfgRow = (await fetchMfgCatalog({ id: productId }, qc))[0] ?? null;
         if (!mfgRow) return [];
 
         // Master-Admin's Modular ON/OFF is the single source of truth: a size is
@@ -896,7 +934,7 @@ export const useProductSizes = (productId: string | undefined) =>
         // generate-skus). sibsToRows drops sizes turned OFF in Modular /
         // pos_active so they vanish from the picker (Chairman 2026-06-01).
         if (mfgRow.model_id) {
-          const siblings = await fetchMfgCatalog({ modelId: mfgRow.model_id });
+          const siblings = await fetchMfgCatalog({ modelId: mfgRow.model_id }, qc);
           const rows = sibsToRows(siblings);
           if (rows.length > 0) return rows;
         }
@@ -905,7 +943,7 @@ export const useProductSizes = (productId: string | undefined) =>
         // (model_id is NULL). Group by base_model + category instead — same
         // denormalised text that generate-skus stamps on every sibling.
         if (mfgRow.base_model && mfgRow.category) {
-          const siblings = await fetchMfgCatalog({ baseModel: mfgRow.base_model, category: mfgRow.category });
+          const siblings = await fetchMfgCatalog({ baseModel: mfgRow.base_model, category: mfgRow.category }, qc);
           const rows = sibsToRows(siblings);
           if (rows.length > 0) return rows;
         }
@@ -936,6 +974,7 @@ export const useProductSizes = (productId: string | undefined) =>
       return rows ?? [];
     },
   });
+};
 
 // size_library is small (7 rows) and changes rarely — cache aggressively so
 // every Configurator screen doesn't re-fetch.
@@ -1026,6 +1065,8 @@ export const useCategoriesAll = () =>
 export type MfgCatalogCategory = 'SOFA' | 'BEDFRAME' | 'MATTRESS' | 'ACCESSORY' | 'FABRIC_ACCESSORY' | 'SERVICE';
 
 export interface MfgCatalogRow {
+  /** Selling-only source retained for immediate catalog-to-product navigation. */
+  sourceRow?: MfgCatalogApiRow;
   id:            string;
   code:          string;
   name:          string;
@@ -1089,7 +1130,7 @@ export const useMfgCatalog = () =>
       const rows = await fetchMfgCatalog();
 
       return rows
-        .map((r) => {
+        .map((r): MfgCatalogRow | null => {
           const m = Array.isArray(r.product_models) ? r.product_models[0] : r.product_models;
           // Hide SKUs whose Model is currently deactivated — commander's
           // "All off" toggle on the Model Detail page should pull the whole
@@ -1097,6 +1138,7 @@ export const useMfgCatalog = () =>
           // still show (orphan SKUs predate the Model layer).
           if (m && m.active === false) return null;
           return {
+            sourceRow:    r,
             id:           r.id,
             code:         r.code,
             name:         r.name,
@@ -1237,8 +1279,9 @@ export function classifyCompartmentCode(rawCode: string): ResolvedSofaCompartmen
  *  When the SKU has no model_id (orphan, predates the Model layer), the
  *  query resolves to null and the configurator falls back to its legacy
  *  per-Model `products` row. */
-export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
-  useQuery({
+export const useSofaCustomizerData = (leadSkuId: string | undefined) => {
+  const qc = useQueryClient();
+  return useQuery({
     enabled: !!leadSkuId,
     queryKey: ['sofa-customizer-data', leadSkuId],
     queryFn: async (): Promise<SofaCustomizerData | null> => {
@@ -1252,7 +1295,7 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
       // sell_price_sen + seat_height_prices[].sellingPriceSen; the endpoint strips
       // the per-height cost (priceSen) so nothing here can leak or misprice on cost.
       // Step 1: resolve the SKU → Model. mfg_products carries the model_id FK.
-      const sku = (await fetchMfgCatalog({ id: leadSkuId }))[0] ?? null;
+      const sku = (await fetchMfgCatalog({ id: leadSkuId }, qc))[0] ?? null;
       if (!sku) return null;
 
       const model = Array.isArray(sku.product_models)
@@ -1272,7 +1315,15 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
       // (loadModelSofaModulePrices) and the same key combo scoping uses, so the
       // POS and server SKU sets are identical by construction (not just for
       // today's data). model_code === base_model on every sofa SKU.
-      const skuPriceRows = await fetchMfgCatalog({ baseModel: model.model_code, category: 'SOFA' });
+      // Once the model is known these reads are independent. Keep the unfiltered
+      // sibling scope for prices; the shelf catalog omits off-shelf modules.
+      const [skuPriceRows, resolved, accessoryRows] = await Promise.all([
+        fetchMfgCatalog({ baseModel: model.model_code, category: 'SOFA' }, qc),
+        fetchMasterMaintenance(qc),
+        Promise.all(readSofaAccessoryIds(model.allowed_options).map((id) =>
+          fetchMfgCatalog({ modelId: id }, qc).catch(() => []),
+        )),
+      ]);
       // Raw per-module SELLING rows. The flat `modulePrices` (depth/tier-agnostic
       // sell_price_sen) is the fallback; the Configurator rebuilds a depth-aware
       // P1 selling map from `sellingRows` so the per-seat-size grid price reaches
@@ -1306,7 +1357,6 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
       // effective-dated master config blob (respecting effective_from) this read
       // used to select from maintenance_config_history — image/label meta only,
       // no pricing (module price comes from modulePrices above).
-      const resolved = await authedFetch<MaintenanceResolved>('/maintenance-config/resolved?scope=master');
       const cfg = (resolved.data ?? {}) as {
         sofaCompartmentMeta?: Record<string, MaintenanceCompartmentMeta>;
         sofaCompartments?:    string[];
@@ -1341,9 +1391,6 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
       // refused by Houzs as unknown_item_code. One switched off "On the sofa"
       // (owner 2026-10-24) is sold on its own and never goes on a canvas, even
       // while a sofa Model still ticks it.
-      const accessoryRows = await Promise.all(
-        readSofaAccessoryIds(model.allowed_options).map((id) => fetchMfgCatalog({ modelId: id }).catch(() => [])),
-      );
       const accessories: SofaAccessoryOption[] = accessoryRows.flatMap((rows) => {
         const r = rows.find((x) => x.status === 'ACTIVE' && x.pos_active !== false && x.product_models?.active !== false);
         const accModel = r?.product_models;
@@ -1382,6 +1429,7 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
     // Houzs has NO realtime — poll in place of the `sofa-customizer-${leadSkuId}` channel.
     refetchInterval: 30_000,
   });
+};
 
 /** Realtime invalidate on mfg_products + product_models edits so commander's
  *  Backend changes land on the POS catalog within ~300ms. Mirrors the
@@ -2192,8 +2240,9 @@ export interface SofaComboRow {
  * see at a glance which Model the combo applies to. Filtering by current Model
  * lands once the retail↔mfg bridge surfaces base_model on CatalogProduct.
  */
-export const useSofaCombos = (baseModel?: string | null) =>
+export const useSofaCombos = (baseModel?: string | null, opts?: { enabled?: boolean }) =>
   useQuery({
+    enabled: opts?.enabled ?? true,
     queryKey: ['sofa-combos', baseModel ?? 'all'],
     queryFn: async (): Promise<SofaComboRow[]> => {
       const params = new URLSearchParams();
@@ -2301,8 +2350,9 @@ export interface SofaQuickPickRow {
 }
 
 /** Active global Quick Picks for one Model (or all when baseModel omitted). */
-export const useSofaQuickPicks = (baseModel?: string | null) =>
+export const useSofaQuickPicks = (baseModel?: string | null, opts?: { enabled?: boolean }) =>
   useQuery({
+    enabled: opts?.enabled ?? true,
     queryKey: ['sofa-quick-picks', baseModel ?? 'all'],
     queryFn: async (): Promise<SofaQuickPickRow[]> => {
       const params = new URLSearchParams();

@@ -7,6 +7,7 @@ import { AuthGate } from './components/AuthGate';
 import { MaintainGate } from './components/MaintainGate';
 import { HrGate } from './components/HrGate';
 import { MarketingGate } from './components/MarketingGate';
+import { loadConfiguratorRoute } from './lib/configurator-route';
 
 /* Code-splitting (perf, 2026-06-13) — the POS shipped as ONE ~1.2 MB JS chunk
    because every page was imported eagerly here, so the Configurator (sofa snap
@@ -17,7 +18,7 @@ import { MarketingGate } from './components/MarketingGate';
    RootLayout. The PWA still precaches the split chunks in the background after
    first paint, so navigation stays instant once installed. */
 const ChangePin = lazy(() => import('./pages/ChangePin').then((m) => ({ default: m.ChangePin })));
-const Configurator = lazy(() => import('./pages/Configurator').then((m) => ({ default: m.Configurator })));
+const Configurator = lazy(loadConfiguratorRoute);
 const Cart = lazy(() => import('./pages/Cart').then((m) => ({ default: m.Cart })));
 const Handover = lazy(() => import('./pages/Handover').then((m) => ({ default: m.Handover })));
 const HandoverConfirmed = lazy(() => import('./pages/HandoverConfirmed').then((m) => ({ default: m.HandoverConfirmed })));
