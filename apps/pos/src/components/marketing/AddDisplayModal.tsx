@@ -8,17 +8,17 @@
 // the catalogue's — and the launch request it came from, which brings its
 // photo and NEW pill, as Arrive would.
 
-import { useMemo, useState } from 'react';
-import { X } from 'lucide-react';
+import { useMemo, useState, type ChangeEvent } from 'react';
+import { ImageUp, X } from 'lucide-react';
 import {
   compLine, displayCopyFrom, seatDepth, shapeName, sizeName, specOf, TYPES,
-  type DisplayCopy, type DisplayItem, type DisplayType, type DuplicateSource, type LaunchRequest, type SofaLayout,
+  type DisplayCopy, type DisplayItem, type DisplayType, type DuplicateSource, type LaunchRequest, type PreparedImage, type SofaLayout,
 } from './marketing-model';
 import {
   allowedOr, coloursOf, fabricsFor, preferred, withValue,
   type MarketingOptions, type ModelOption,
 } from './marketing-options';
-import { useAddDisplay, type ShowroomOption } from '../../lib/marketing-api';
+import { preparePhoto, useAddDisplay, type ShowroomOption } from '../../lib/marketing-api';
 import { ComponentBuilder } from './ComponentBuilder';
 import { DuplicateFrom, FormMoreMenu } from './DuplicateFrom';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
@@ -115,6 +115,24 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
   const [duplicating, setDuplicating] = useState(false);
   const add = useAddDisplay();
   const [err, setErr] = useState('');
+  /** 2990-0021: a note and a photo kept with this display (PNG / JPG). */
+  const [remarks, setRemarks] = useState('');
+  const [ownPhoto, setOwnPhoto] = useState<PreparedImage | null>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const onPhotoFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    setPhotoBusy(true);
+    try {
+      setOwnPhoto(await preparePhoto(f));
+      setErr('');
+    } catch (x) {
+      setErr(`Photo not added — ${(x as Error).message}`);
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
   const set = (p: Partial<AddState>) => setA((x) => ({ ...x, ...p }));
 
   const models = opts.models[a.type];
@@ -172,6 +190,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
       await add.mutateAsync({
         venueId: showroom.id, type: a.type, modelId: ident.modelId, name: ident.name, code: ident.code,
         photoUrl: isSofa ? null : ident.photoUrl, ...extra, ...carried,
+        remarks: remarks.trim(), ...(ownPhoto ? { ownPhoto } : {}),
       });
       onAdded(ident.name);
     } catch (e) {
@@ -327,6 +346,34 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
                   <input type="number" min={1} value={a.qty} onChange={(e) => set({ qty: Math.max(1, Number(e.target.value) || 1) })} className={s.input} />
                 </label>
               )}
+
+              <label className={s.field}>
+                <span className={s.fieldLabel}>Remarks</span>
+                <textarea
+                  className={`${s.input} ${s.noteInput}`} rows={2} maxLength={1000} value={remarks}
+                  placeholder="e.g. next to the entrance, price tag missing" onChange={(e) => setRemarks(e.target.value)}
+                />
+              </label>
+
+              <div className={s.field}>
+                <span className={s.fieldLabel}>Photo</span>
+                {ownPhoto ? (
+                  <div className={s.photoCard}>
+                    <img src={`data:${ownPhoto.contentType};base64,${ownPhoto.dataB64}`} alt="Photo to attach" className={s.refPhotoImg} />
+                    <button type="button" className={s.ghostBtn} onClick={() => setOwnPhoto(null)}>Remove photo</button>
+                  </div>
+                ) : (
+                  <label className={s.planStrip}>
+                    <span className={s.planStripIcon}><ImageUp size={20} strokeWidth={1.75} className={s.icon} /></span>
+                    <span className={s.planStripText}>
+                      <span className={s.planStripTitle}>{photoBusy ? 'Preparing the photo…' : 'Attach a photo'}</span>
+                      <span className={s.planStripSub}>Optional · JPG or PNG</span>
+                    </span>
+                    <span className={s.planStripPill}>Upload</span>
+                    <input type="file" accept="image/png,image/jpeg" className={s.hiddenFile} disabled={photoBusy} onChange={(e) => void onPhotoFile(e)} />
+                  </label>
+                )}
+              </div>
             </div>
 
             <div className={s.modalRight}>

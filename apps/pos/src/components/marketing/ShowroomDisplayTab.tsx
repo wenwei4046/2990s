@@ -11,7 +11,7 @@ import {
 } from './marketing-model';
 import { useMarketingOptions, type MarketingOptions } from './marketing-options';
 import {
-  prepareFloorplan, useDeleteFloorplan, useFloorplan, usePutFloorplan, useRemoveDisplay, useRequestPhoto, type MarketingState,
+  prepareFloorplan, useDeleteFloorplan, useDisplayPhoto, useEditDisplay, useFloorplan, usePutFloorplan, useRemoveDisplay, useRequestPhoto, type MarketingState,
 } from '../../lib/marketing-api';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
 import { RequestPhotoTile } from './RequestPhotoTile';
@@ -43,6 +43,61 @@ const RequestPhoto = ({ requestId, version }: { requestId: string; version: stri
       <img src={p.dataUrl} alt="" className={s.refPhotoImg} />
       {p.match === 'non_exact' && p.note && <div className={s.refPhotoNote}>{p.note}</div>}
     </div>
+  );
+};
+
+/** What Marketing keeps on a piece (2990-0021): the photo attached when it was
+ *  added, its remarks, and — on a sofa — the W × D printed on its diagram.
+ *  Saved on this display only; the product's own size is never touched. */
+const DisplayExtras = ({ it, toast }: { it: DisplayItem; toast: (t: string) => void }) => {
+  const photo = useDisplayPhoto(it.id, it.ownPhotoAt).data;
+  const edit = useEditDisplay();
+  const [remarks, setRemarks] = useState(it.remarks);
+  const [w, setW] = useState(it.dimsWidthCm == null ? '' : String(it.dimsWidthCm));
+  const [d, setD] = useState(it.dimsDepthCm == null ? '' : String(it.dimsDepthCm));
+  const wn = Number(w), dn = Number(d);
+  const blank = !w.trim() && !d.trim();
+  const dimsOk = blank || (Number.isInteger(wn) && Number.isInteger(dn) && wn >= 1 && wn <= 1000 && dn >= 1 && dn <= 1000);
+  const save = (p: { remarks?: string; dimsWidthCm?: number | null; dimsDepthCm?: number | null }, done: string) =>
+    edit.mutate({ id: it.id, ...p }, { onSuccess: () => toast(done), onError: (e) => toast((e as Error).message) });
+  return (
+    <>
+      {it.ownPhotoAt && photo && (
+        <div className={s.compsBlock}>
+          <div className={s.compsTitle}>Photo</div>
+          <img src={photo} alt={`${it.name} photo`} className={s.refPhotoImg} />
+        </div>
+      )}
+      <div className={s.compsBlock}>
+        <div className={s.compsTitle}>Remarks</div>
+        <textarea
+          className={`${s.input} ${s.noteInput}`} rows={3} maxLength={1000} value={remarks} aria-label="Remarks"
+          placeholder="Add a note about this piece" onChange={(e) => setRemarks(e.target.value)}
+        />
+        <button
+          type="button" className={s.ghostBtn} disabled={edit.isPending || remarks.trim() === it.remarks}
+          onClick={() => save({ remarks: remarks.trim() }, 'Remarks saved')}
+        >Save remarks</button>
+      </div>
+      {it.type === 'sofa' && (
+        <div className={s.compsBlock}>
+          <div className={s.compsTitle}>Diagram size · this display only</div>
+          <div className={s.inchRow}>
+            <input type="number" min={1} max={1000} value={w} aria-label="Overall width (cm)" placeholder="Width" onChange={(e) => setW(e.target.value)} className={`${s.input} ${s.inchInput}`} />
+            <span className={s.inchUnit}>×</span>
+            <input type="number" min={1} max={1000} value={d} aria-label="Overall depth (cm)" placeholder="Depth" onChange={(e) => setD(e.target.value)} className={`${s.input} ${s.inchInput}`} />
+            <span className={s.inchUnit}>cm</span>
+          </div>
+          <div className={s.refPhotoNote}>
+            {dimsOk ? 'Blank = the size worked out from the layout.' : 'Width and depth: whole cm, 1 to 1000.'}
+          </div>
+          <button
+            type="button" className={s.ghostBtn} disabled={edit.isPending || !dimsOk}
+            onClick={() => save(blank ? { dimsWidthCm: null, dimsDepthCm: null } : { dimsWidthCm: wn, dimsDepthCm: dn }, 'Diagram size saved')}
+          >Save size</button>
+        </div>
+      )}
+    </>
   );
 };
 
@@ -347,7 +402,8 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
             <div className={s.drawerBody}>
               <div className={s.drawerPic} style={bg(photoOf(drawer.it, opts))}>
                 {drawer.it.type === 'sofa' && (
-                  <SofaLayoutPreview layout={drawer.it.layout} modules={drawer.it.modules} depth={seatDepth(drawer.it.seat)} art={opts.moduleArt} dims />
+                  <SofaLayoutPreview layout={drawer.it.layout} modules={drawer.it.modules} depth={seatDepth(drawer.it.seat)} art={opts.moduleArt} dims
+                    dimsLabel={drawer.it.dimsWidthCm != null && drawer.it.dimsDepthCm != null ? { w: drawer.it.dimsWidthCm, h: drawer.it.dimsDepthCm } : undefined} />
                 )}
                 {drawer.it.type !== 'sofa' && !photoOf(drawer.it, opts) && <span className={s.drawerInitial}>{initialOf(drawer.it.name)}</span>}
               </div>
@@ -360,6 +416,7 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
                   <div key={row.k} className={s.kvRow}><span className={s.kvKey}>{row.k}</span><span className={s.kvVal}>{row.v}</span></div>
                 ))}
               </div>
+              <DisplayExtras key={drawer.it.id} it={drawer.it} toast={toast} />
               {drawer.it.type === 'sofa' && drawer.it.sourceRequestId && drawer.it.photoAt && (
                 <RequestPhoto requestId={drawer.it.sourceRequestId} version={drawer.it.photoAt} />
               )}

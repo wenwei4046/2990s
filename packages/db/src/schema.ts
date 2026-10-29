@@ -3274,6 +3274,15 @@ export const marketingDisplays = pgTable('marketing_displays', {
   sofaCategory:    text('sofa_category').notNull().default(''),
   sofaFunction:    text('sofa_function').notNull().default(''),
   sourceRequestId: uuid('source_request_id'),           // FK → marketing_launch_requests (0217)
+  // 0222 (2990-0021): free-text remarks, a diagram-only W x D (null = computed
+  // from the layout) and a photo attached by hand, stored inline.
+  remarks:         text('remarks').notNull().default(''),
+  dimsWidthCm:     integer('dims_width_cm'),
+  dimsDepthCm:     integer('dims_depth_cm'),
+  ownPhotoContentType: text('own_photo_content_type'),
+  ownPhotoB64:     text('own_photo_b64'),
+  ownPhotoFileName: text('own_photo_file_name'),
+  ownPhotoUpdatedAt: timestamp('own_photo_updated_at', { withTimezone: true }),
   createdBy:       text('created_by'),
   createdByName:   text('created_by_name'),
   createdAt:       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -3285,6 +3294,7 @@ export const marketingDisplays = pgTable('marketing_displays', {
   qtyChk:  check('marketing_displays_qty_chk', sql`${t.qty} >= 1`),
   sizeChk: check('marketing_displays_size_chk', sql`(${t.lengthCm} IS NULL OR ${t.lengthCm} BETWEEN 1 AND 1000) AND (${t.widthCm} IS NULL OR ${t.widthCm} BETWEEN 1 AND 1000)`),
   layoutChk: check('marketing_displays_layout_chk', sql`${t.layout} IS NULL OR jsonb_typeof(${t.layout}) = 'array'`),
+  dimsChk: check('marketing_displays_dims_chk', sql`(${t.dimsWidthCm} IS NULL AND ${t.dimsDepthCm} IS NULL) OR (${t.dimsWidthCm} BETWEEN 1 AND 1000 AND ${t.dimsDepthCm} BETWEEN 1 AND 1000)`),
   idxLive: index('idx_marketing_displays_live').on(t.venueId, t.createdAt).where(sql`${t.removedAt} IS NULL`),
 }));
 
