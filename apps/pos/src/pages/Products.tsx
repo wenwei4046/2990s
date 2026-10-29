@@ -112,6 +112,8 @@ import {
   upsertHeightTierSelling,
 } from '../lib/products/seat-height-selling';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
+import { resolvePhotoUrl } from '../lib/queries';
+import { resolveCompartmentImageSrc, SOFA_COMPARTMENT_API_PREFIX } from '../lib/products/product-photos';
 import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useModelFabricTierOverrides, useUpsertModelFabricTierOverride, useDeleteModelFabricTierOverride, useCompartmentPool, useCompartmentFabricTierOverrides, useUpsertCompartmentFabricTierOverride, useDeleteCompartmentFabricTierOverride, useAddons, type AddonRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, type SpecialAddonCompartmentPrice, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
 import {
   useProductModels,
@@ -263,23 +265,6 @@ const ScopeDeferredNotice = ({
 );
 
 const ICON_PROPS = { size: 16, strokeWidth: 1.75 } as const;
-
-/* PR — Commander 2026-05-28 (PHOTO FIX): product_models.photo_url is stored
-   as a relative proxy path (`/product-models/{id}/photo/{key}`) — see
-   apps/api/src/routes/product-models.ts. Rendering it raw in an <img src>
-   resolves against the POS origin (which doesn't host that route) → 404 →
-   broken image / first-letter placeholder. Prefix VITE_API_URL so the URL
-   points at the Worker's public photo proxy. Absolute URLs (http(s)://)
-   pass through untouched. Sister function to resolvePhotoUrl() in
-   lib/queries.ts which the Catalog grid already uses; both branches must
-   stay in sync. */
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
-const resolveModelPhotoUrl = (raw: string | null | undefined): string | null => {
-  if (!raw) return null;
-  if (/^https?:\/\//i.test(raw)) return raw;
-  if (!API_URL) return raw; // local dev — best effort, let it break visibly
-  return raw.startsWith('/') ? `${API_URL}${raw}` : `${API_URL}/${raw}`;
-};
 
 type TopTab = 'sku' | 'modular' | 'specialAddons' | 'fabrics' | 'maintenance' | 'combos' | 'delivery' | 'pwp' | 'campaignPromos';
 
@@ -1032,11 +1017,9 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
                   >
                     {m.photo_url ? (
                       <img
-                        /* PR — Commander 2026-05-28: photo_url is a relative
-                           proxy path; prefix VITE_API_URL so the browser
-                           can fetch it from the Worker public photo endpoint
-                           (apps/api/src/routes/product-models.ts). */
-                        src={resolveModelPhotoUrl(m.photo_url) ?? ''}
+                        /* Share the Catalog resolver so photos use the active
+                           Houzs / legacy API, matching the model data source. */
+                        src={resolvePhotoUrl(m.photo_url) ?? ''}
                         alt={`${m.name} photo`}
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                       />
@@ -3488,29 +3471,6 @@ const parseRmToCenti = (rm: string): number => {
   const n = Number(rm);
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.round(n * 100);
-};
-
-/* PR — Commander 2026-05-28: resolve the per-compartment image source.
- * Three cases:
- *   1) imageKey starts with `sofa-compartments/` — uploaded via the API.
- *      Render via the Worker proxy (`{API}/maintenance-config/sofa-compartments/{code}/photo/{key}`)
- *      so the auth-free public route streams the R2 object.
- *   2) imageKey starts with `sofa-modules/` — legacy bundled SVG, render
- *      from /public.
- *   3) imageKey is an http(s) URL — render directly. */
-const SOFA_COMPARTMENT_API_PREFIX = 'sofa-compartments/';
-const resolveCompartmentImageSrc = (
-  code: string,
-  imageKey: string | undefined,
-): string | null => {
-  if (!imageKey) return null;
-  if (/^https?:\/\//i.test(imageKey)) return imageKey;
-  if (imageKey.startsWith(SOFA_COMPARTMENT_API_PREFIX)) {
-    const API = (import.meta.env.VITE_API_URL ?? '') as string;
-    return `${API}/maintenance-config/sofa-compartments/${encodeURIComponent(code)}/photo/${encodeURIComponent(imageKey)}`;
-  }
-  // Legacy bundled SVG / PNG from /public.
-  return `/${imageKey}`;
 };
 
 const SofaCompartmentsList = ({
