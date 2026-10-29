@@ -12,13 +12,13 @@ import { useMemo, useState, type ChangeEvent } from 'react';
 import { ImageUp, X } from 'lucide-react';
 import {
   compLine, displayCopyFrom, seatDepth, shapeName, sizeName, specOf, TYPES,
-  type DisplayCopy, type DisplayItem, type DisplayType, type DuplicateSource, type LaunchRequest, type SofaLayout,
+  type DisplayCopy, type DisplayItem, type DisplayType, type DuplicateSource, type LaunchRequest, type PreparedImage, type SofaLayout,
 } from './marketing-model';
 import {
   allowedOr, coloursOf, fabricsFor, preferred, withValue,
   type MarketingOptions, type ModelOption,
 } from './marketing-options';
-import { preparePhoto, useAddDisplay, type PreparedImage, type ShowroomOption } from '../../lib/marketing-api';
+import { preparePhoto, useAddDisplay, type ShowroomOption } from '../../lib/marketing-api';
 import { ComponentBuilder } from './ComponentBuilder';
 import { DuplicateFrom, FormMoreMenu } from './DuplicateFrom';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
