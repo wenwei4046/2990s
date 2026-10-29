@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type Dispatch, type PointerEvent, type ReactNode, type SetStateAction } from 'react';
+import { createPortal } from 'react-dom';
 import { Trash2, RotateCw, Eraser, Maximize2, Minimize2, Plus, X, SlidersHorizontal, Palette } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, fabricTierAddon, maintActiveValues, resolveFabricTierOverride, type FabricTier } from '@2990s/shared';
@@ -261,7 +262,13 @@ const MIRROR_PAIR: Record<string, string> = {
   'L(RHF)':  'L(LHF)',
 };
 
+function ToolbarPlacement({ target, children }: { target?: HTMLElement | null; children: ReactNode }) {
+  return target ? createPortal(children, target) : children;
+}
+
 interface CustomBuilderProps {
+  /** Android landscape moves the existing live price/actions into the topbar. */
+  toolbarTarget?: HTMLElement | null;
   productId: string;
   productName: string;
   pricing: SofaProductPricing;
@@ -389,7 +396,8 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, modelCustomizerState = 'ready', onRetryCustomizer, enabledFabricCodes, sellingDataReady = true, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, specialAddons, specialSel = [], onSpecialSelChange, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly, initialAccessories, orderPieces = null }: CustomBuilderProps) => {
+export const CustomBuilder = ({ toolbarTarget, productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, modelCustomizerState = 'ready', onRetryCustomizer, enabledFabricCodes, sellingDataReady = true, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, specialAddons, specialSel = [], onSpecialSelChange, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly, initialAccessories, orderPieces = null }: CustomBuilderProps) => {
+  const PriceBarTag = toolbarTarget ? 'div' : 'footer';
   const isPhone = useMediaQuery('(max-width: 767px)');
   const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
   const paletteRef = useRef<HTMLDialogElement>(null);
@@ -1432,7 +1440,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   /* ─── Render ───────────────────────────────────────────────────── */
 
   return (
-    <div className={styles.shell}>
+    <div className={styles.shell} data-fit-sofa={toolbarTarget ? '' : undefined}>
       <dialog
         ref={paletteRef}
         open={isPhone ? undefined : true}
@@ -1688,6 +1696,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             height: roomH * SCALE,
             transform: `scale(${visualScale})`,
             transformOrigin: 'top left',
+            left: toolbarTarget ? `calc(50% - ${roomW * SCALE * visualScale / 2}px)` : undefined,
+            top: toolbarTarget ? `calc(50% - ${roomH * SCALE * visualScale / 2}px)` : undefined,
           }}
           onPointerDown={(e) => {
             // Click on empty stage (not on a cell or group outline) — deselect.
@@ -2335,7 +2345,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           )}
         </div>
 
-        {!layoutOnly && <footer className={styles.priceBar}>
+        {!layoutOnly && <ToolbarPlacement target={toolbarTarget}><PriceBarTag className={`${styles.priceBar} ${toolbarTarget ? styles.toolbarPriceBar : ''}`} aria-label="Configuration total and actions">
           <div>
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
             {/* extraAmountRm and the add-ons are per-unit on the LEAD group only
@@ -2413,7 +2423,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                           : 'Add to cart'}
             </Button>
           </div>
-        </footer>}
+        </PriceBarTag></ToolbarPlacement>}
         {saveComboOpen && (
           <SaveQuickPickModal
             modules={orderSofaCellsLeftToRight(cells, depth).map((c) => c.moduleId)}

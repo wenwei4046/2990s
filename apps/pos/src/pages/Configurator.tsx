@@ -74,6 +74,8 @@ import {
 import { authedFetchRaw } from '../lib/apiClient';
 import { CustomBuilder, centerCellsInRoom } from './CustomBuilder';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import { usesAndroidSofaLayout } from '../lib/android-sofa-layout';
+import { IS_SIMULATION } from '../lib/simulation-mode';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import {
   BedframeOptions,
@@ -254,6 +256,9 @@ export const Configurator = () => {
   const { productId } = useParams<{ productId: string }>();
   const navigate = useNavigate();
   const isPhone = useMediaQuery('(max-width: 767px)');
+  const isTabletLandscape = useMediaQuery('(min-width: 768px) and (max-width: 1366px) and (orientation: landscape)');
+  const androidSofaLandscape = isTabletLandscape && usesAndroidSofaLayout(navigator.userAgent, IS_SIMULATION, window.location.search, navigator.maxTouchPoints);
+  const [customToolbarTarget, setCustomToolbarTarget] = useState<HTMLDivElement | null>(null);
   const savedNavigation = useRef(false);
   const [draftBaseline, setDraftBaseline] = useState<string | null>(null);
   const [nestedDraftDirty, setNestedDraftDirty] = useState(false);
@@ -2397,8 +2402,11 @@ export const Configurator = () => {
     <>
     <Topbar
       step={isSofa ? undefined : 'cart'}
+      sofaConfigurator={isSofa}
       centerSlot={sofaCenterSlot}
-      rightSlot={sofaTopbarSlot ?? sizeTopbarSlot ?? bedframeTopbarSlot}
+      rightSlot={isSofa && mode === 'custom' && androidSofaLandscape
+        ? <div ref={setCustomToolbarTarget} className={styles.customToolbar} data-sofa-toolbar="" />
+        : sofaTopbarSlot ?? sizeTopbarSlot ?? bedframeTopbarSlot}
       mobileActionsInPage
       mobileCenterInPage
     />
@@ -2503,6 +2511,7 @@ export const Configurator = () => {
       </div>
     )}
     <main
+      data-fit-sofa={isSofa && mode === 'custom' && androidSofaLandscape ? '' : undefined}
       onPointerDownCapture={captureDraftBaseline}
       onKeyDownCapture={captureDraftBaseline}
       onClickCapture={captureDraftBaseline}
@@ -2622,6 +2631,7 @@ export const Configurator = () => {
           />
         ) : (
           <CustomBuilder
+            toolbarTarget={androidSofaLandscape ? customToolbarTarget : null}
             productId={p.id}
             productName={p.name}
             pricing={effectiveSofaPricing}

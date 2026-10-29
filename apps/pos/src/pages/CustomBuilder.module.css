@@ -41,6 +41,90 @@
   .priceBar { flex-wrap: wrap; }
   .priceActions { flex-wrap: wrap; margin-left: auto; max-width: 100%; justify-content: flex-end; }
 }
+
+/* On scaled Android tablets the canvas column can be narrower than the
+   total plus both actions. Wrap complete controls instead of clipping the
+   Add button. The selector leaves Apple and phone layouts unchanged. */
+@media (min-width: 768px) and (max-width: 1366px) {
+  :global([data-android-sofa]) ~ main .priceBar { flex-wrap: wrap; gap: 12px; }
+  :global([data-android-sofa]) ~ main .priceActions { flex-wrap: wrap; max-width: 100%; margin-left: auto; }
+  /* Empty room space scrolls the page; dragging a sofa still owns the gesture.
+     Accessories already opt out of browser gestures with touch-action:none. */
+  :global([data-android-sofa]) ~ main .stage { touch-action: pan-y; }
+  :global([data-android-sofa]) ~ main .cell { touch-action: none; }
+}
+
+/* Android landscape uses the available screen height, not the room's
+   width-derived height. The existing observer fits the whole room and TV. */
+.shell[data-fit-sofa] {
+  height: 100%;
+  min-height: 0;
+  margin-top: 0;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 16px;
+}
+.shell[data-fit-sofa] .palette { height: 100%; min-height: 0; max-height: none; overscroll-behavior-y: contain; }
+.shell[data-fit-sofa] .canvasCol { min-height: 0; gap: 8px; }
+.shell[data-fit-sofa] .canvasHead {
+  flex-shrink: 0;
+  align-items: center;
+  min-height: 52px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  gap: 8px 16px;
+}
+.shell[data-fit-sofa] .canvasHead > div:first-child > span { font-size: 10px; letter-spacing: .14em; }
+.shell[data-fit-sofa] .canvasTitle { margin: 2px 0 0; font-size: var(--fs-18); }
+.shell[data-fit-sofa] .headTools { gap: 8px; }
+.shell[data-fit-sofa] .clearBtn {
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+.shell[data-fit-sofa] .depthChip { padding: 6px 10px; background: transparent; }
+.shell[data-fit-sofa] .stageViewport { flex: 1 1 0; min-height: 0; aspect-ratio: auto; }
+.shell[data-fit-sofa] .stage { position: absolute; }
+
+/* This is the same price/action content, portalled into the Android toolbar. */
+.priceBar.toolbarPriceBar {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  gap: 6px 12px;
+}
+.toolbarPriceBar > div:first-child {
+  flex: 0 0 auto;
+  max-width: 100%;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  align-content: center;
+  gap: 2px 6px;
+  padding: 6px 10px;
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.toolbarPriceBar > div:first-child > span:first-child { font-size: 10px; letter-spacing: .12em; }
+.toolbarPriceBar .footerPrice { margin-left: 0; }
+.toolbarPriceBar .footerPrice > span:last-child { font-size: var(--fs-24); }
+.toolbarPriceBar .footerPrice > span:first-child { font-size: var(--fs-12); }
+.toolbarPriceBar .priceActions { gap: 8px; }
+.toolbarPriceBar .priceActions > button {
+  min-height: 44px;
+  padding: 8px 12px;
+  font-size: var(--fs-12);
+  border-radius: var(--radius-sm);
+  white-space: normal;
+}
+.toolbarPriceBar .desktopSaveAction { border: 1px solid var(--line); background: #fff; }
+.toolbarPriceBar .desktopSaveAction:hover { border-color: var(--line-strong); background: var(--c-paper); }
+.toolbarPriceBar .comboCue { grid-column: 1 / -1; font-size: 10px; margin-top: 0; }
+
 .mobilePaletteHead,
 .mobileCanvasActions,
 .mobileModuleTools,

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ArrowLeft, Bookmark, KeyRound, LifeBuoy, ListOrdered, LogOut, ShoppingBag, Menu } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
@@ -9,6 +9,7 @@ import { useCart, cartItemCount, cartSubtotal } from '../state/cart';
 import { HouzsSsoMenu } from './HouzsSsoMenu';
 import { IS_HOUZS } from '../lib/apiClient';
 import { IS_SIMULATION } from '../lib/simulation-mode';
+import { usesAndroidSofaLayout } from '../lib/android-sofa-layout';
 import styles from './Topbar.module.css';
 
 export type StepId = 'cart' | 'customer' | 'confirm';
@@ -20,6 +21,8 @@ const STEPS: { id: StepId; label: string }[] = [
 ];
 
 interface TopbarProps {
+  /** Android sofa controls need their own density rules; keep Apple unchanged. */
+  sofaConfigurator?: boolean;
   mobileActionsInPage?: boolean;
   mobileCenterInPage?: boolean;
   /** Give the center content its own full-width row below the phone navigation. */
@@ -46,7 +49,7 @@ interface TopbarProps {
   backLabel?: string;
 }
 
-export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileActionsInPage, mobileCenterInPage, mobileMenuSlot, centerBelowOnMobile }: TopbarProps) {
+export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileActionsInPage, mobileCenterInPage, mobileMenuSlot, centerBelowOnMobile, sofaConfigurator }: TopbarProps) {
   const { user, signOut } = useAuth();
   const { data: staff } = useStaff();
   const canChangePin = useCanChangePin();
@@ -62,11 +65,38 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
   const name = staff?.name ?? user?.email?.split('@')[0] ?? 'Staff';
   const role = isMarketing ? 'marketing' : staff?.role ?? 'Staff';
   const avatarColor = staff?.color ?? '#A6471E';
+  const androidSofa = sofaConfigurator && usesAndroidSofaLayout(navigator.userAgent, IS_SIMULATION, window.location.search, navigator.maxTouchPoints);
+  const headerRef = useRef<HTMLElement>(null);
+
+  // Android actions may occupy another row. Keep fixed configurator notices
+  // below the actual sticky header, including the local simulation banner.
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!androidSofa || !header) return;
+    const root = document.documentElement;
+    const banner = header.previousElementSibling?.classList.contains(styles.simulationBanner!) ? header.previousElementSibling : null;
+    const measure = () => {
+      const bounds = header.getBoundingClientRect();
+      root.style.setProperty('--android-sofa-topbar-bottom', `${bounds.bottom}px`);
+      root.style.setProperty('--android-sofa-chrome-height', `${Math.ceil(bounds.height + (banner?.getBoundingClientRect().height ?? 0))}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    if (banner) observer.observe(banner);
+    window.addEventListener('scroll', measure, { passive: true });
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('scroll', measure);
+      root.style.removeProperty('--android-sofa-topbar-bottom');
+      root.style.removeProperty('--android-sofa-chrome-height');
+    };
+  }, [androidSofa]);
 
   return (
     <>
     {IS_SIMULATION && <div className={styles.simulationBanner}>Local simulation · No live orders or payments</div>}
-    <header className={`${styles.topbar} ${centerBelowOnMobile ? styles.centerBelowOnMobile : ''}`}>
+    <header ref={headerRef} data-android-sofa={androidSofa ? '' : undefined} className={`${styles.topbar} ${centerBelowOnMobile ? styles.centerBelowOnMobile : ''}`}>
       <div className={styles.left}>
         {backTo && (
           <Link to={backTo} className={styles.iconBtn} aria-label={backLabel ?? 'Back'}>
