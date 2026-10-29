@@ -101,8 +101,8 @@ describe('Catalog Model presentation', () => {
   it('renders the current Model photo through the active API origin instead of the cached SKU photo', () => {
     render(tree());
     const card = screen.getByRole('link', { name: /BOONTAL/ });
-    const photo = card.querySelector('[style*="background-image"]');
-    expect(photo).toHaveStyle({ backgroundImage: 'url("https://erp.houzscentury.com/api/scm/product-models/model-sofa/photo/current.jpg")' });
+    const photo = card.querySelector('img');
+    expect(photo).toHaveAttribute('src', 'https://erp.houzscentury.com/api/scm/product-models/model-sofa/photo/current.jpg');
     expect(card.innerHTML).not.toContain('old-sofa.jpg');
     expect(within(card).queryByText('No photo')).not.toBeInTheDocument();
     expect(mocks.productModels).toHaveBeenCalledWith({ refetchInterval: 30_000 });

@@ -22,7 +22,7 @@
 // ----------------------------------------------------------------------------
 
 import { supabase } from './supabase';
-import { getHouzsToken } from './houzsSession';
+import { clearHouzsSessionPass, getHouzsSessionPass, getHouzsToken, setHouzsSessionPass } from './houzsSession';
 
 const ENV = import.meta.env as Record<string, string | undefined>;
 
@@ -89,6 +89,19 @@ function targetHeaders(): Record<string, string> {
   return TARGET === 'houzs' ? { 'X-Company-Id': HOUZS_COMPANY_ID } : {};
 }
 
+/** The signed pass belongs only to the configured Houzs origin. Cross-origin
+ *  base overrides (including 2990's API) must neither receive nor replace it. */
+function sessionPassOrigin(url: string): string | null {
+  if (!IS_HOUZS || !API_URL) return null;
+  try {
+    const target = new URL(url);
+    const trusted = new URL(API_URL);
+    return target.origin === trusted.origin ? trusted.origin : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Low-level authed fetch: attaches the active target's bearer + mandatory
  * headers (X-Company-Id on Houzs) and returns the raw Response WITHOUT throwing
@@ -110,8 +123,19 @@ export async function authedFetchRaw(path: string, init?: RequestInit, baseOverr
   if (!base) throw new Error(`API base is not set for target '${TARGET}'`);
   const token = await bearerToken();
   if (!token) throw new Error('not_authenticated');
+  const url = `${base}${path}`;
+  const passOrigin = sessionPassOrigin(url);
+  const pass = passOrigin ? getHouzsSessionPass(token, passOrigin) : null;
   const isStringBody = typeof init?.body === 'string';
-  return fetch(`${base}${path}`, {
+  const headers = new Headers(init?.headers);
+  // This credential is owned by the session store, including when a caller
+  // supplies a Headers object or uses different casing for a base override.
+  headers.delete('X-Session-Pass');
+  for (const [name, value] of Object.entries(targetHeaders())) headers.set(name, value);
+  headers.set('authorization', `Bearer ${token}`);
+  if (pass) headers.set('X-Session-Pass', pass);
+  if (isStringBody) headers.set('content-type', 'application/json');
+  const res = await fetch(url, {
     /* HTTP cache OFF by default (2026-08-24). Houzs stamps
        `cache-control: private, max-age=60` on the LIST endpoints the POS both
        reads and edits — `GET /mfg-products` (their mfg-products.ts:210, added
@@ -132,13 +156,22 @@ export async function authedFetchRaw(path: string, init?: RequestInit, baseOverr
        still pass its own `cache`. */
     cache: 'no-store',
     ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      ...targetHeaders(),
-      authorization: `Bearer ${token}`,
-      ...(isStringBody ? { 'content-type': 'application/json' } : {}),
-    },
+    // Custom credential headers can survive cross-origin redirects. Our API
+    // endpoints respond directly, so refuse a redirect when carrying a pass.
+    ...(pass ? { redirect: 'error' as const } : {}),
+    headers: Object.fromEntries(headers.entries()),
   });
+  if (passOrigin && (!res.url || sessionPassOrigin(res.url) === passOrigin)) {
+    if (res.status === 401 || res.status === 403) {
+      clearHouzsSessionPass(token, passOrigin);
+    } else if (res.ok) {
+      // Expired/revoked passes fall back to normal bearer validation SERVER-side;
+      // that response supplies the renewed pass. Never retry or authorize here.
+      const renewed = res.headers.get('X-Session-Pass');
+      if (renewed) setHouzsSessionPass(token, passOrigin, renewed);
+    }
+  }
+  return res;
 }
 
 /**

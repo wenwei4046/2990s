@@ -28,18 +28,31 @@ import {
 export function useFreeGiftSync(): void {
   const { user } = useAuth();
   const lines = useCart((s) => s.lines);
-  const productsQ = useMfgProducts();
-  const modelGiftsQ = useModelDefaultGifts();
+  const triggerModelIds = new Set(lines.flatMap((l) => {
+    const cfg = l.config as { isFreeGift?: boolean; modelId?: string | null };
+    return !cfg.isFreeGift && cfg.modelId ? [cfg.modelId] : [];
+  }));
+  const modelGiftsQ = useModelDefaultGifts({ enabled: !!user && triggerModelIds.size > 0 });
+  // Product names are needed only when a model in this cart can earn a gift.
+  // The full admin SKU list must not compete with the shopper's catalog load.
+  const needsGiftNames = (modelGiftsQ.data ?? []).some((r) => triggerModelIds.has(r.modelId) && r.gifts.length > 0);
+  const productsQ = useMfgProducts({ enabled: !!user && needsGiftNames });
 
   useEffect(() => {
     if (!user) return;
+    const cart = useCart.getState().lines;
+    // An empty/gift-only cart can remove orphan gifts locally. A restored cart
+    // with real model triggers must wait for the rules before changing gifts.
+    const hasModelTrigger = cart.some((l) => {
+      const cfg = l.config as { isFreeGift?: boolean; modelId?: string | null };
+      return !cfg.isFreeGift && !!cfg.modelId;
+    });
+    if (hasModelTrigger && !modelGiftsQ.data) return;
     const products = productsQ.data;
-    if (!products) return;                       // catalog not loaded yet
-    const nameById = new Map(products.map((p) => [p.id, p.name]));
     const giftsByModel = new Map((modelGiftsQ.data ?? []).map((r) => [r.modelId, r.gifts]));
 
     const triggerLines: TriggerLine[] = [];
-    for (const l of useCart.getState().lines) {
+    for (const l of cart) {
       const cfg = l.config as {
         kind?: string; productId?: string; isFreeGift?: boolean; modelId?: string | null;
         sizeId?: string; cells?: Array<{ moduleId?: unknown }>;
@@ -80,6 +93,8 @@ export function useFreeGiftSync(): void {
     const desired = mergeDesiredFreeGifts(
       computeDesiredFreeGifts(buildFreeGiftTriggers(triggerLines)),
     );
+    if (desired.length > 0 && !products) return;
+    const nameById = new Map((products ?? []).map((p) => [p.id, p.name]));
     useCart.getState().reconcileFreeGifts(desired, nameById);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, lines, productsQ.data, modelGiftsQ.data]);

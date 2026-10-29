@@ -1931,8 +1931,9 @@ export interface ModelDefaultGiftRow {
   updatedAt: string;
 }
 
-export const useModelDefaultGifts = () =>
+export const useModelDefaultGifts = (opts?: { enabled?: boolean }) =>
   useQuery({
+    enabled: opts?.enabled ?? true,
     queryKey: ['model-default-gifts'],
     queryFn: async (): Promise<ModelDefaultGiftRow[]> => {
       return await authedFetch<ModelDefaultGiftRow[]>('/model-free-gifts');
