@@ -32,9 +32,14 @@ const inList = (modelId: string | null, list: string[]): boolean =>
 export function usePwpCodeSync(): void {
   const { user } = useAuth();
   const lines = useCart((s) => s.lines);
-  const rulesQ = usePwpRules();
-  const reservedQ = useMyReservedPwpCodes();
-  const quotesQ = useQuotes();
+  // Full-empty transitions intentionally do no reconciliation (see above).
+  // Resume automatically when CartSync restores a cart or a shopper adds a line.
+  const hasCart = lines.length > 0;
+  const enabled = !!user && hasCart;
+  const rulesQ = usePwpRules({ enabled });
+  const reservedQ = useMyReservedPwpCodes({ enabled });
+  // Quotes are needed only to protect reserved codes during an orphan sweep.
+  const quotesQ = useQuotes({ enabled: enabled && (reservedQ.data?.length ?? 0) > 0 });
   const reserve = useReservePwpCodes();
   const free = useFreePwpCodes();
   const busyRef = useRef(false);
@@ -45,10 +50,13 @@ export function usePwpCodeSync(): void {
   const userId = user?.id ?? null;
   const rules = rulesQ.data;
   const reserved = reservedQ.data;
-  const quotes = quotesQ.data;
+  // Resuming a disabled query can expose an old cached quote list while it
+  // refreshes. Never free a quote's codes based on that incomplete snapshot.
+  const quotes = quotesQ.isSuccess && !quotesQ.isFetching ? quotesQ.data : undefined;
 
   useEffect(() => {
     if (!userId) { lastQtyRef.current.clear(); return; }
+    if (!hasCart) return;
     const t = setTimeout(() => { void reconcile(); }, 600);
     return () => clearTimeout(t);
 
@@ -244,7 +252,7 @@ export function usePwpCodeSync(): void {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, lines, rules, reserved, quotes]);
+  }, [userId, hasCart, lines, rules, reserved, quotes]);
 }
 
 /** Mount once inside the providers (see main.tsx), beside <CartSync />. */

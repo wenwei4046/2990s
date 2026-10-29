@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import {
   Package,
@@ -22,7 +22,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
-import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow, type MfgCatalogCategory } from '../lib/queries';
+import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow, type MfgCatalogCategory, type CategoryRow } from '../lib/queries';
 import { useStaff, isPosSalesRole } from '../lib/staff';
 import { useHrAccess, useMaintainAccess, useMarketingAccess } from '../lib/houzs-perms';
 import { useMarketingState } from '../lib/marketing-api';
@@ -58,6 +58,9 @@ const CAT_ICON: Record<string, LucideIcon> = {
   kids: Baby,
   accessory: Star,
 };
+
+const EMPTY_ROWS: MfgCatalogRow[] = [];
+const EMPTY_CATEGORIES: CategoryRow[] = [];
 
 const MOBILE_CATEGORIES = [
   { id: 'all', label: 'All' },
@@ -228,7 +231,9 @@ export const Catalog = () => {
      Maintain tier who already had Sales analysis. The pill on Product
      launching counts requests still in Pending Info. */
   const { canUseMarketing } = useMarketingAccess();
-  const marketing = useMarketingState(canUseMarketing);
+  // Only the sidebar badge needs this full marketing snapshot. Let the selling
+  // catalog arrive before adding its request to the initial network traffic.
+  const marketing = useMarketingState(canUseMarketing && catalog.data !== undefined);
   const pendingLaunches = (marketing.data?.requests ?? []).filter((r) => r.status === 'pending').length;
   useMfgCatalogRealtime();
   const allCategories = useCategoriesAll();
@@ -286,7 +291,7 @@ export const Catalog = () => {
   const setActiveCat = (c: string) => setParam('cat', c);
   const setActiveBranding = (b: string) => setParam('brand', b);
 
-  const rows = catalog.data ?? [];
+  const rows = catalog.data ?? EMPTY_ROWS;
   const cards = useMemo(() => buildCards(rows), [rows]);
 
   /* Sofa-exclusivity (Commander 2026-05-30): a sofa is sold on its own ticket.
@@ -302,7 +307,7 @@ export const Catalog = () => {
   // Categories come from the categories table directly (not derived from
   // products) so TBC ones still render even with zero products. Brandings
   // come from the live data since only seeded brands are useful as a filter.
-  const cats = allCategories.data ?? [];
+  const cats = allCategories.data ?? EMPTY_CATEGORIES;
 
   const brandingList = useMemo<string[]>(() => {
     const set = new Set<string>();
@@ -310,8 +315,8 @@ export const Catalog = () => {
     return Array.from(set).sort();
   }, [rows]);
 
-  const liveCats = cats.filter((c) => !c.tbc);
-  const tbcCats = cats.filter((c) => c.tbc);
+  const liveCats = useMemo(() => cats.filter((c) => !c.tbc), [cats]);
+  const tbcCats = useMemo(() => cats.filter((c) => c.tbc), [cats]);
 
   // Counts roll up at the card layer (one per Model) so the sidebar reads
   // "Sofas · 12" instead of "Sofas · 180" when each Model has 15 SKUs.
@@ -347,6 +352,8 @@ export const Catalog = () => {
       return true;
     });
   }, [cards, activeCat, activeBranding, query, liveCats]);
+
+  const brandGroups = useMemo(() => groupByBranding(filtered), [filtered]);
 
   const resetFilters = () => {
     setSearchParams((prev) => {
@@ -649,7 +656,7 @@ export const Catalog = () => {
                  chip + its own card grid. Null/empty branding lands in
                  "Other". Card layout inside each section reuses the
                  existing .grid CSS class so spacing/columns stay identical. */
-              groupByBranding(filtered).map(({ branding, items }) => (
+              brandGroups.map(({ branding, items }, groupIndex) => (
                 <section key={branding} style={{ marginBottom: 24 }}>
                   <header className={styles.brandGroupHeader} style={{
                     display: 'flex', alignItems: 'baseline', gap: 8,
@@ -676,10 +683,11 @@ export const Catalog = () => {
                     </span>
                   </header>
                   <div className={styles.grid}>
-                    {items.map((p) => (
+                    {items.map((p, itemIndex) => (
                       <ProductCard
                         key={p.modelKey}
                         p={p}
+                        eagerPhoto={groupIndex === 0 && itemIndex < 4}
                         blocked={
                           (p.categoryId === 'sofa' && hasMainNonSofa) ||
                           ((p.categoryId === 'mattress' || p.categoryId === 'bedframe') && hasSofa)
@@ -702,7 +710,9 @@ export const Catalog = () => {
   );
 };
 
-const ProductCard = ({ p, blocked = false, addToOrder }: { p: CatalogCard; blocked?: boolean; addToOrder?: string }) => {
+const ProductCard = memo(function ProductCard({ p, blocked = false, addToOrder, eagerPhoto }: {
+  p: CatalogCard; blocked?: boolean; addToOrder?: string; eagerPhoto: boolean;
+}) {
   // PR — Commander wanted a "Configure" affordance even when SKUs are not
   // wired into the production configurator yet. For now the card links to
   // the Configurator route using the lead SKU's id; the Configurator will
@@ -748,8 +758,17 @@ const ProductCard = ({ p, blocked = false, addToOrder }: { p: CatalogCard; block
     <>
       <div
         className={styles.photo}
-        style={p.photoUrl ? { backgroundImage: `url(${p.photoUrl})` } : undefined}
       >
+        {p.photoUrl && (
+          <img
+            src={p.photoUrl}
+            alt=""
+            draggable={false}
+            loading={eagerPhoto ? 'eager' : 'lazy'}
+            decoding="async"
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        )}
         {!p.photoUrl && (
           <span className={styles.photoFallback}>{productInitial(p.name)}</span>
         )}
@@ -831,4 +850,4 @@ const ProductCard = ({ p, blocked = false, addToOrder }: { p: CatalogCard; block
       {inner}
     </Link>
   );
-};
+});

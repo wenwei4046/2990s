@@ -35,8 +35,9 @@ interface SaveQuoteInput {
   total: number;
 }
 
-export const useQuotes = () =>
+export const useQuotes = (opts?: { enabled?: boolean }) =>
   useQuery({
+    enabled: opts?.enabled ?? true,
     queryKey: ['quotes'],
     queryFn: async (): Promise<QuoteRow[]> => {
       const body = await authedFetch<QuotesResponse>('/quotes');
