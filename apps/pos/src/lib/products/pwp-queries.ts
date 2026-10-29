@@ -44,8 +44,9 @@ export type PwpRuleInput = {
   active: boolean;
 };
 
-export function usePwpRules() {
+export function usePwpRules(opts?: { enabled?: boolean }) {
   return useQuery({
+    enabled: opts?.enabled ?? true,
     queryKey: ['pwp-rules'],
     queryFn: async () => (await authedFetch<{ rules: PwpRuleRow[] }>('/pwp-rules')).rules,
     staleTime: 30_000,
@@ -113,8 +114,9 @@ export type PwpCodeValidation = {
 };
 
 /** The caller's RESERVED codes (keyed client-side by cartLineKey). */
-export function useMyReservedPwpCodes() {
+export function useMyReservedPwpCodes(opts?: { enabled?: boolean }) {
   return useQuery({
+    enabled: opts?.enabled ?? true,
     queryKey: ['pwp-codes-mine'],
     queryFn: async () => (await authedFetch<{ codes: PwpReservedCode[] }>('/pwp-codes/mine')).codes,
     staleTime: 5_000,
