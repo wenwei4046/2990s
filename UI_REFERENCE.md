@@ -170,6 +170,13 @@ When porting this to React + Vite + RR7:
 
 These are intentional changes from the prototype's current state. Anything not on this list is a regression and must be reverted to the prototype's behaviour.
 
+### SKU Master model filter names · 30 October 2026
+
+Owner requested the POS SKU Master model filter rail to follow the Model name.
+The pills and More menu display saved Modular names and sort by name; search
+matches either name or code. Existing SKU model codes remain the filter keys,
+with the code shown as a fallback when no saved name is available.
+
 ### Fabric series grouping · 30 October 2026
 
 Owner requested one series for MONZA variants and saved series names (such as
