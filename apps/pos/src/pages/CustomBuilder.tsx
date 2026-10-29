@@ -290,6 +290,13 @@ interface CustomBuilderProps {
    *  builder falls back to its legacy pricing.compartments filter + bundled
    *  /sofa-modules/*.png assets. */
   modelCustomizer?: SofaCustomizerData | null;
+  /** Initial module/price readiness; cached data stays usable during refresh. */
+  modelCustomizerState?: 'pending' | 'error' | 'ready';
+  onRetryCustomizer?: () => void;
+  /** The product's fabric gate can arrive before module prices/accessories. */
+  enabledFabricCodes?: string[];
+  /** Module choices may render before initial combo/fabric pricing is ready. */
+  sellingDataReady?: boolean;
   /** mfg_products.base_model — pins the saved Quick Pick to this Model so
    *  it only appears in Quick Pick for this exact sofa Model. Empty/absent
    *  = wildcard (shows for all models). */
@@ -380,7 +387,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, specialAddons, specialSel = [], onSpecialSelChange, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly, initialAccessories, orderPieces = null }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, modelCustomizerState = 'ready', onRetryCustomizer, enabledFabricCodes, sellingDataReady = true, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, specialAddons, specialSel = [], onSpecialSelChange, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly, initialAccessories, orderPieces = null }: CustomBuilderProps) => {
   const isPhone = useMediaQuery('(max-width: 767px)');
   const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
   const paletteRef = useRef<HTMLDialogElement>(null);
@@ -1145,8 +1152,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     [cells, baseModelOverride, compartmentOverrideMap],
   );
   const fabricCodes = useMemo<string[]>(
-    () => (productId?.startsWith('mfg-') ? (modelCustomizer?.fabricIds ?? []) : []),
-    [productId, modelCustomizer],
+    () => (productId?.startsWith('mfg-') ? (enabledFabricCodes ?? modelCustomizer?.fabricIds ?? []) : []),
+    [productId, enabledFabricCodes, modelCustomizer],
   );
   const fabricSeriesRows = useMemo<ProductFabricRow[]>(() => {
     if (!productId?.startsWith('mfg-')) return productFabrics.data ?? [];
@@ -1195,7 +1202,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   const unpricedPieces = useMemo(() => unpricedAccessories(accessories, accessoryById), [accessories, accessoryById]);
   // Pieces on the canvas, in ringgit — added to the Total, sold as their own lines.
   const accessoriesRm = accessoriesTotalSen(accessories, accessoryById) / 100;
-  const canAdd = cells.length > 0 && allClosed && !stillNeeded && unpricedPieces.length === 0
+  const canAdd = sellingDataReady && modelCustomizerState === 'ready' && cells.length > 0 && allClosed && !stillNeeded && unpricedPieces.length === 0
     && (!onSwapConfirm || effectiveBuildCount === 1)
     && (!onAddToOrderConfirm || effectiveBuildCount === 1);
 
@@ -1446,8 +1453,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           <span className="t-eyebrow">Modules</span>
           <span className={styles.hint}>Tap to add</span>
         </div>
-        <div className={styles.paletteList}>
-          {(() => {
+        <div className={styles.paletteList} aria-busy={modelCustomizerState === 'pending'}>
+          {modelCustomizerState === 'pending' ? (
+            <p className={styles.hint} role="status">Loading modules…</p>
+          ) : modelCustomizerState === 'error' ? (
+            <div role="alert">
+              <p className={styles.hint}>Could not load modules.</p>
+              {onRetryCustomizer && <Button variant="secondary" onClick={onRetryCustomizer}>Retry</Button>}
+            </div>
+          ) : (() => {
             /* PR — Commander 2026-05-28: when the parent passed a
              * modelCustomizer, use its compartment list (Backend allowed
              * options ∩ master sofaCompartments pool) as the source of
@@ -1535,7 +1549,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
               cushions: no limit); drag a piece on the canvas to move it. One
               without a selling price can't be added — Houzs would book whatever
               the tablet sent for it. */}
-          {accessoryOptions.length > 0 && (
+          {modelCustomizerState === 'ready' && accessoryOptions.length > 0 && (
             <div className={styles.paletteGroup}>
               <div className={styles.paletteGroupHead}>Sofa accessories</div>
               {accessoryOptions.map((o) => {
@@ -1565,7 +1579,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             </div>
           )}
         </div>
-        {layoutOnly ? layoutOnly.railBlock : (
+        {layoutOnly ? layoutOnly.railBlock : productId?.startsWith('mfg-') && enabledFabricCodes === undefined && modelCustomizerState !== 'ready' ? (
+          <p className={styles.hint}>{modelCustomizerState === 'pending' ? 'Loading fabrics…' : 'Could not load fabrics.'}</p>
+        ) : (
           <FabricColourPicker
             productFabrics={fabricSeriesRows}
             fabricId={fabricSel?.fabricId ?? null}
