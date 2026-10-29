@@ -7,8 +7,17 @@
 // seeded from HOOKKA. Forward-port goal: when raw_materials lands, re-enable
 // live aggregation in the API route.
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { authedFetch } from '../apiClient';
+
+// Converter writes affect the display grouping as well as the selling library.
+// Await the refresh so a successful save is visible when its editor closes.
+const invalidateFabricCatalog = (qc: QueryClient) => Promise.all([
+  qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+  qc.invalidateQueries({ queryKey: ['fabric-series-names'] }),
+  qc.invalidateQueries({ queryKey: ['fabric-library'] }),
+  qc.invalidateQueries({ queryKey: ['fabric-colours'] }),
+]);
 
 export type FabricCategoryValue = 'B.M-FABR' | 'S-FABR' | 'S.M-FABR' | 'LINING' | 'WEBBING';
 export type FabricTier = 'PRICE_1' | 'PRICE_2' | 'PRICE_3';
@@ -119,7 +128,7 @@ export function useUpdateFabricSeries() {
         },
       );
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+    onSuccess: () => invalidateFabricCatalog(qc),
   });
 }
 
@@ -136,7 +145,10 @@ export function useUpdateFabricDescription() {
         },
       );
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+    onSuccess: () => Promise.all([
+      qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+      qc.invalidateQueries({ queryKey: ['fabric-colours'] }),
+    ]),
   });
 }
 
@@ -159,7 +171,7 @@ export function useCreateFabric() {
       authedFetch<{ fabric: FabricTrackingRow }>(`/fabric-tracking`, {
         method: 'POST', body: JSON.stringify(body),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+    onSuccess: () => invalidateFabricCatalog(qc),
   });
 }
 
@@ -178,7 +190,7 @@ export function useBulkUpsertFabrics() {
         method: 'POST',
         body: JSON.stringify({ rows }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+    onSuccess: () => invalidateFabricCatalog(qc),
   });
 }
 
@@ -187,6 +199,6 @@ export function useDeleteFabric() {
   return useMutation({
     mutationFn: (id: string) =>
       authedFetch<void>(`/fabric-tracking/${id}`, { method: 'DELETE' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+    onSuccess: () => invalidateFabricCatalog(qc),
   });
 }

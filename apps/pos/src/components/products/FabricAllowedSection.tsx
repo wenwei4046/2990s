@@ -9,12 +9,16 @@ import styles from './FabricAllowedSection.module.css';
 export const FabricAllowedSection = ({
   series,
   coloursBySeries,
+  isLoading = false,
+  error,
   isTicked,
   onToggle,
   onSetAll,
 }: {
   series: { id: string; label: string }[];
   coloursBySeries: Map<string, { colourId: string; label: string }[]>;
+  isLoading?: boolean;
+  error?: unknown;
   isTicked: (code: string) => boolean;
   onToggle: (code: string) => void;
   onSetAll: (codes: string[], on: boolean) => void;
@@ -46,7 +50,13 @@ export const FabricAllowedSection = ({
         letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--fg-muted)',
         marginBottom: 'var(--space-2)',
       }}>Fabrics</div>
-      {withColours.length === 0 ? (
+      {isLoading ? (
+        <div style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>Loading fabrics…</div>
+      ) : error ? (
+        <div role="alert" style={{ fontSize: 'var(--fs-13)', color: 'var(--c-burnt)' }}>
+          Could not load fabric series: {error instanceof Error ? error.message : String(error)}
+        </div>
+      ) : withColours.length === 0 ? (
         <div style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
           No fabrics yet — add them in the Backend Fabric Converter.
         </div>

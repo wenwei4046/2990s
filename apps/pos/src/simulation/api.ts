@@ -230,6 +230,10 @@ async function dispatch(path: string, params: URLSearchParams, method: string, b
   if (/^\/mfg-products\/[^/]+\/price-history$/.test(path)) return json({ history: [] });
   if (path === '/fabric-library') return json({ fabrics: fixtures.fabrics });
   if (path === '/fabric-colours') return json({ colours: fixtures.fabricColours });
+  if (path === '/fabric-tracking/lite') return json({ fabrics: fixtures.fabricColours.map((colour) => ({
+    fabric_code: colour.colourId,
+    series: fixtures.fabrics.find((fabric) => fabric.id === colour.fabricId)?.label ?? null,
+  })) });
   if (path === '/pos-pools/size-library') return json({ rows: fixtures.sizeLibrary });
   if (path === '/maintenance-config/resolved') return json({ data: fixtures.maintenance, effectiveFrom: '2020-01-01', hasPendingPriceChange: false, pendingEffectiveFrom: null });
   if (path === '/pos-pools/sofa-combos' || path === '/sofa-combos') return json({ rules: fixtures.combos });

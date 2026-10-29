@@ -170,6 +170,17 @@ When porting this to React + Vite + RR7:
 
 These are intentional changes from the prototype's current state. Anything not on this list is a regression and must be reverted to the prototype's behaviour.
 
+### Fabric series grouping · 30 October 2026
+
+Owner requested one series for MONZA variants and saved series names (such as
+BROWNIE colours assigned to HOMELY) to appear in Modular and Fabric tiers. Both
+screens use the saved converter series first, then normalized code families.
+Tier rows represent a whole series; an explicit click applies the chosen selling
+tier to its original library records. Existing different tiers display Mixed
+until edited. When several saved series share a price record, show one combined
+row with a Shared tier hint. Colour codes, allowed options and order/pricing IDs
+stay unchanged. Existing table/drawer styling and configurator layout remain.
+
 ### §1 · Per-Model sofa pricing (already merged into prototype/backend-catalog.jsx + prototype/pos-sofa-config.jsx)
 
 **Approved on:** earlier in this thread.

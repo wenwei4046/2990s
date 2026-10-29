@@ -112,7 +112,7 @@ import {
   upsertHeightTierSelling,
 } from '../lib/products/seat-height-selling';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
-import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useModelFabricTierOverrides, useUpsertModelFabricTierOverride, useDeleteModelFabricTierOverride, useCompartmentPool, useCompartmentFabricTierOverrides, useUpsertCompartmentFabricTierOverride, useDeleteCompartmentFabricTierOverride, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, type SpecialAddonCompartmentPrice, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
+import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useModelFabricTierOverrides, useUpsertModelFabricTierOverride, useDeleteModelFabricTierOverride, useCompartmentPool, useCompartmentFabricTierOverrides, useUpsertCompartmentFabricTierOverride, useDeleteCompartmentFabricTierOverride, useAddons, type AddonRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, type SpecialAddonCompartmentPrice, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
 import {
   useProductModels,
   useProductModel,
@@ -122,6 +122,8 @@ import {
 } from '../lib/products/product-models-queries';
 import { FabricsTable } from '../components/products/FabricsTable';
 import { groupFabricSeries } from '../lib/fabric-series-groups';
+import { useFabricSeriesNames } from '../lib/fabric-series-queries';
+import { FabricSeriesTierTable } from '../components/products/FabricSeriesTierTable';
 import { FabricAllowedSection } from '../components/products/FabricAllowedSection';
 import { SofaComboTab } from '../components/products/SofaComboTab';
 import { PwpRulesTab } from '../components/products/PwpRulesTab';
@@ -1166,6 +1168,7 @@ const ModelAllowedOptionsDrawer = ({
   // = fabric_colours. On/off is per colour, stored as allowed_options.fabrics.
   const fabricLib = useFabricLibrary();
   const fabricColours = useFabricColours();
+  const fabricSeriesNames = useFabricSeriesNames();
   // Special Add-ons pool for the per-Model on/off section (migration 0134).
   // MUST stay above the early-return guards below (hooks order — a hook placed
   // after `if (model.isLoading) return` causes a "Rendered more hooks" crash
@@ -1174,10 +1177,10 @@ const ModelAllowedOptionsDrawer = ({
   // Sofa Accessory models a SOFA Model can offer on its canvas (owner
   // 2026-10-16, lib/sofa-accessories.ts). Same hooks-order rule as above.
   const accessoryModels = useProductModels({ category: 'FABRIC_ACCESSORY' });
-  // KN12, KN10 … show as one KN group.
+  // Saved converter series names take precedence over code-derived families.
   const fabricGroups = useMemo(
-    () => groupFabricSeries(fabricLib.data ?? [], fabricColours.data ?? []),
-    [fabricLib.data, fabricColours.data],
+    () => groupFabricSeries(fabricLib.data ?? [], fabricColours.data ?? [], fabricSeriesNames.data ?? []),
+    [fabricLib.data, fabricColours.data, fabricSeriesNames.data],
   );
 
   /* Draft of the allowed_options under edit. Initialised once when the row
@@ -1466,6 +1469,8 @@ const ModelAllowedOptionsDrawer = ({
               <FabricAllowedSection
                 series={fabricGroups.series}
                 coloursBySeries={fabricGroups.coloursBySeries}
+                isLoading={fabricLib.isLoading || fabricColours.isLoading || fabricSeriesNames.isLoading}
+                error={fabricLib.error || fabricColours.error || fabricSeriesNames.error}
                 isTicked={(code) => isTicked('fabrics', code)}
                 onToggle={(code) => toggle('fabrics', code)}
                 onSetAll={setFabricsBulk}
@@ -1554,6 +1559,8 @@ const ModelAllowedOptionsDrawer = ({
             <FabricAllowedSection
               series={fabricGroups.series}
               coloursBySeries={fabricGroups.coloursBySeries}
+              isLoading={fabricLib.isLoading || fabricColours.isLoading || fabricSeriesNames.isLoading}
+              error={fabricLib.error || fabricColours.error || fabricSeriesNames.error}
               isTicked={(code) => isTicked('fabrics', code)}
               onToggle={(code) => toggle('fabrics', code)}
               onSetAll={setFabricsBulk}
@@ -5066,18 +5073,10 @@ const CodeFormatPanel = ({
    each fabric's SELLING tier. The Δ is added per item to the order total (like
    the delivery fee); the cost/procurement side (fabric_trackings) is untouched.
    ════════════════════════════════════════════════════════════════════════ */
-const FABRIC_TIER_NEXT: Record<string, 'PRICE_1' | 'PRICE_2' | 'PRICE_3'> = {
-  PRICE_1: 'PRICE_2', PRICE_2: 'PRICE_3', PRICE_3: 'PRICE_1',
-};
-const fabricTierShort = (t: string | null | undefined): string =>
-  t ? `Price ${t.replace('PRICE_', '')}` : 'Price 1';
-
 const FabricPricingPanel = () => {
   const canEdit   = useProductsMode() === 'full';
   const cfg       = useFabricTierAddonConfig();
   const updateCfg = useUpdateFabricTierAddonConfig();
-  const fabrics   = useFabricLibrary();
-  const updateTier = useUpdateFabricLibraryTier();
 
   // Per-model special prices (migration 0172).
   const overrides      = useModelFabricTierOverrides();
@@ -5159,12 +5158,6 @@ const FabricPricingPanel = () => {
     } catch (err) { setError(String((err as Error).message ?? err)); }
   };
 
-  const cycle = (row: FabricLibraryRow, field: 'sofaTier' | 'bedframeTier') => {
-    if (!canEdit) return;
-    const current = (field === 'sofaTier' ? row.sofaTier : row.bedframeTier) ?? 'PRICE_1';
-    updateTier.mutate({ id: row.id, field, tier: FABRIC_TIER_NEXT[current] ?? 'PRICE_2' });
-  };
-
   const numField = (
     id: string, label: string, hint: string, value: number | '', setValue: (v: number | '') => void,
   ) => (
@@ -5178,24 +5171,6 @@ const FabricPricingPanel = () => {
       <span style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-1)' }}>{hint}</span>
     </div>
   );
-
-  const tierBtn = (row: FabricLibraryRow, field: 'sofaTier' | 'bedframeTier') => {
-    const t = field === 'sofaTier' ? row.sofaTier : row.bedframeTier;
-    return (
-      <button
-        type="button" disabled={!canEdit} onClick={() => cycle(row, field)}
-        title={canEdit ? 'Click to cycle Price 1 → 2 → 3' : undefined}
-        style={{
-          padding: '4px 10px', fontSize: 'var(--fs-13)', borderRadius: 'var(--radius-md)',
-          border: '1px solid var(--line)', cursor: canEdit ? 'pointer' : 'default',
-          background: (t && t !== 'PRICE_1') ? 'var(--c-cream)' : 'transparent',
-          fontWeight: (t && t !== 'PRICE_1') ? 600 : 400,
-        }}
-      >
-        {fabricTierShort(t)}
-      </button>
-    );
-  };
 
   return (
     <div style={{ padding: 'var(--space-5)', maxWidth: 820 }}>
@@ -5219,39 +5194,7 @@ const FabricPricingPanel = () => {
         </Button>
       )}
 
-      <h3 style={{ fontSize: 'var(--fs-15)', fontWeight: 600, margin: 'var(--space-6) 0 var(--space-1)' }}>Fabric tiers</h3>
-      <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
-        {canEdit ? 'Click a tier to cycle Price 1 → 2 → 3. Sofa and bedframe are independent.' : 'Read-only — only Master Admin can change fabric tiers.'}
-      </p>
-      {updateTier.isError && (
-        <div role="alert" style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }}>
-          Tier change failed: {String((updateTier.error as Error)?.message ?? updateTier.error)}
-        </div>
-      )}
-      {fabrics.isLoading ? (
-        <div style={{ color: 'var(--fg-muted)' }}>Loading fabrics…</div>
-      ) : (fabrics.data ?? []).length === 0 ? (
-        <div style={{ color: 'var(--fg-muted)' }}>No fabrics yet — add them in the Backend Fabric Converter.</div>
-      ) : (
-        <table style={{ borderCollapse: 'collapse', width: '100%', maxWidth: 560 }}>
-          <thead>
-            <tr style={{ textAlign: 'left', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-              <th style={{ padding: '6px 8px' }}>Fabric</th>
-              <th style={{ padding: '6px 8px' }}>Sofa tier</th>
-              <th style={{ padding: '6px 8px' }}>Bedframe tier</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(fabrics.data ?? []).map((row) => (
-              <tr key={row.id} style={{ borderTop: '1px solid var(--line)' }}>
-                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{row.label}</td>
-                <td style={{ padding: '6px 8px' }}>{tierBtn(row, 'sofaTier')}</td>
-                <td style={{ padding: '6px 8px' }}>{tierBtn(row, 'bedframeTier')}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <FabricSeriesTierTable canEdit={canEdit} />
 
       <h3 style={{ fontSize: 'var(--fs-15)', fontWeight: 600, margin: 'var(--space-6) 0 var(--space-1)' }}>Per-model special prices</h3>
       <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
