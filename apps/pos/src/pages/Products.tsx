@@ -2143,89 +2143,96 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
       )}
 
       <div className={styles.tableCard}>
-        <table className={`${styles.table} ${styles.tableCompact}`}>
-          <thead>
-            <tr>
-              {/* PR #82 — leading select-all checkbox. Indeterminate when
-                  partial selection on visible rows. Only admin (canEdit)
-                  sees the bulk-delete checkbox column. */}
-              {canEdit && (
-                <th style={{ width: 32 }}>
-                  <input
-                    type="checkbox"
-                    aria-label="Select all visible SKUs"
-                    checked={allSelected}
-                    ref={(el) => { if (el) el.indeterminate = someSelected; }}
-                    onChange={toggleAllVisible}
-                    style={{ cursor: 'pointer' }}
-                  />
-                </th>
-              )}
-              <th>Product Code</th>
-              <th>Description</th>
-              {isSofaView ? (
-                <>
-                  <th>Model</th>
-                  {sofaSizes.map((s) => (
-                    <th key={s} style={{ textAlign: 'right' }}>{s}</th>
-                  ))}
-                </>
-              ) : isMattressView ? (
-                <>
-                  <th>Branding</th>
-                  <th>Size</th>
-                  <th style={{ textAlign: 'right' }}>Price</th>
-                  <th style={{ textAlign: 'right' }}>PWP Price</th>
-                </>
-              ) : (
-                <>
-                  <th>Category</th>
-                  <th>Size</th>
-                  <th style={{ textAlign: 'right' }}>Base Price</th>
-                  <th style={{ textAlign: 'right' }}>PWP Price</th>
-                </>
-              )}
-              <th style={{ textAlign: 'right' }}>Unit (m³)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading && (
+        <div
+          className={styles.skuTableScroll}
+          role="region"
+          aria-label="SKU products"
+          tabIndex={0}
+        >
+          <table className={`${styles.table} ${styles.tableCompact}`}>
+            <thead>
               <tr>
-                <td colSpan={colCount} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
-                  Loading products…
-                </td>
+                {/* PR #82 — leading select-all checkbox. Indeterminate when
+                    partial selection on visible rows. Only admin (canEdit)
+                    sees the bulk-delete checkbox column. */}
+                {canEdit && (
+                  <th style={{ width: 32 }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select all visible SKUs"
+                      checked={allSelected}
+                      ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                      onChange={toggleAllVisible}
+                      style={{ cursor: 'pointer' }}
+                    />
+                  </th>
+                )}
+                <th>Product Code</th>
+                <th>Description</th>
+                {isSofaView ? (
+                  <>
+                    <th>Model</th>
+                    {sofaSizes.map((s) => (
+                      <th key={s} style={{ textAlign: 'right' }}>{s}</th>
+                    ))}
+                  </>
+                ) : isMattressView ? (
+                  <>
+                    <th>Branding</th>
+                    <th>Size</th>
+                    <th style={{ textAlign: 'right' }}>Price</th>
+                    <th style={{ textAlign: 'right' }}>PWP Price</th>
+                  </>
+                ) : (
+                  <>
+                    <th>Category</th>
+                    <th>Size</th>
+                    <th style={{ textAlign: 'right' }}>Base Price</th>
+                    <th style={{ textAlign: 'right' }}>PWP Price</th>
+                  </>
+                )}
+                <th style={{ textAlign: 'right' }}>Unit (m³)</th>
               </tr>
-            )}
-            {!isLoading && rows.map((row) => (
-              <ProductRow
-                key={row.id}
-                row={row}
-                editMode={editMode}
-                isSofaView={isSofaView}
-                isMattressView={isMattressView}
-                sofaSizes={sofaSizes}
-                /* Suppliers drawer + bulk-delete checkbox + truck icon are
-                   admin-only (canEdit). sales_director / view roles see
-                   selling prices but never the supplier purchase-cost data. */
-                onOpenSuppliers={canEdit ? setSuppliersRow : undefined}
-                showSelectCol={canEdit}
-                selected={selectedIds.has(row.id)}
-                onToggleSelected={() => toggleRow(row.id)}
-              />
-            ))}
-            {!isLoading && !error && rows.length === 0 && (
-              <tr>
-                <td colSpan={colCount} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
-                  <Package size={32} strokeWidth={1.5} />
-                  <div style={{ marginTop: 8 }}>No products yet.</div>
-                  <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
-                    Run the seed import if you just migrated the schema.
-                  </div>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {isLoading && (
+                <tr>
+                  <td colSpan={colCount} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
+                    Loading products…
+                  </td>
+                </tr>
+              )}
+              {!isLoading && rows.map((row) => (
+                <ProductRow
+                  key={row.id}
+                  row={row}
+                  editMode={editMode}
+                  isSofaView={isSofaView}
+                  isMattressView={isMattressView}
+                  sofaSizes={sofaSizes}
+                  /* Suppliers drawer + bulk-delete checkbox + truck icon are
+                     admin-only (canEdit). sales_director / view roles see
+                     selling prices but never the supplier purchase-cost data. */
+                  onOpenSuppliers={canEdit ? setSuppliersRow : undefined}
+                  showSelectCol={canEdit}
+                  selected={selectedIds.has(row.id)}
+                  onToggleSelected={() => toggleRow(row.id)}
+                />
+              ))}
+              {!isLoading && !error && rows.length === 0 && (
+                <tr>
+                  <td colSpan={colCount} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
+                    <Package size={32} strokeWidth={1.5} />
+                    <div style={{ marginTop: 8 }}>No products yet.</div>
+                    <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
+                      Run the seed import if you just migrated the schema.
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
         {!isLoading && !error && (
           <div className={styles.tableFoot}>
             <span className={styles.eyebrow}>
