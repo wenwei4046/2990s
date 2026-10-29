@@ -12,6 +12,8 @@ interface Props {
   className?: string;
   /** Hero only — draw W (top) × D (right) cm dimension lines, like the PNG presets. */
   showDims?: boolean;
+  /** Print these cm on the W / D lines instead of the computed size (Marketing's display-only override). */
+  dimsLabel?: { w: number; h: number };
   /** Hero only — anchor the box HEIGHT on this aspect (the layout's w/h at its
    *  LARGEST seat size). Keeps the front-back depth at a STABLE screen height
    *  across the seat-size toggle so the WIDTH visibly extends as the seat grows.
@@ -54,7 +56,7 @@ const dimUnit: CSSProperties = { fontWeight: 400, fontSize: 10, marginLeft: 2, o
  * whose aspect-ratio is the layout's cm bbox; cells positioned in %; rotated
  * modules draw their native art centred then rotated (same math as the canvas).
  */
-export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspect, artSrc = bundledPng, tileBundles = true }: Props) => {
+export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspect, artSrc = bundledPng, tileBundles = true, dimsLabel }: Props) => {
   // Re-render once each module's silhouette bbox has been measured.
   const [, bump] = useState(0);
   useEffect(() => {
@@ -212,14 +214,14 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
             <span style={tickV} />
             <span style={lineH} />
             <span style={tickV} />
-            <span style={dimLabel}>{bb.w}<span style={dimUnit}>cm</span></span>
+            <span style={dimLabel}>{dimsLabel?.w ?? bb.w}<span style={dimUnit}>cm</span></span>
           </div>
           {/* Right depth dim — same, rotated to the right edge. */}
           <div style={dimRight} aria-hidden="true">
             <span style={tickH} />
             <span style={lineV} />
             <span style={tickH} />
-            <span style={dimLabel}>{bb.h}<span style={dimUnit}>cm</span></span>
+            <span style={dimLabel}>{dimsLabel?.h ?? bb.h}<span style={dimUnit}>cm</span></span>
           </div>
         </>
       )}

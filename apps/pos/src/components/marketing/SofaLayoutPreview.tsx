@@ -15,7 +15,7 @@ import s from './marketing.module.css';
 /** Room for the W × D dimension lines SofaCellsPreview draws outside the sofa. */
 const DIMS_PADDING: CSSProperties = { padding: '42px 46px 8px 8px' };
 
-export const SofaLayoutPreview = ({ layout, modules, depth, art, dims = false, pad = 4 }: {
+export const SofaLayoutPreview = ({ layout, modules, depth, art, dims = false, dimsLabel, pad = 4 }: {
   layout: SofaLayout | null | undefined;
   modules: readonly string[];
   /** Seat depth the modules are measured at — seatDepth(seat). */
@@ -23,6 +23,8 @@ export const SofaLayoutPreview = ({ layout, modules, depth, art, dims = false, p
   art: (code: string) => string;
   /** Draw the length × depth cm lines (the bigger previews). */
   dims?: boolean;
+  /** W × D cm to print instead of the computed size (a display's own override). */
+  dimsLabel?: { w: number; h: number };
   pad?: number;
 }) => {
   const cells = useMemo(
@@ -33,7 +35,7 @@ export const SofaLayoutPreview = ({ layout, modules, depth, art, dims = false, p
   return (
     <div className={s.layoutBox} style={dims ? DIMS_PADDING : { padding: pad }}>
       <div className={s.layoutFit}>
-        <SofaCellsPreview cells={cells} depth={depth} artSrc={art} showDims={dims} tileBundles={false} />
+        <SofaCellsPreview cells={cells} depth={depth} artSrc={art} showDims={dims} dimsLabel={dimsLabel} tileBundles={false} />
       </div>
     </div>
   );

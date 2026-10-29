@@ -178,10 +178,13 @@ async function listedShowroom(c: Ctx, sb: SupabaseClient, id: string): Promise<R
 
 /* ── displays ─────────────────────────────────────────────────────────────── */
 
+const remarksField = z.string().trim().max(1000);
+
+// Never own_photo_b64: /state lists every display (GET /displays/:id/photo).
 const DISPLAY_SELECT =
   'id, venue_id, type, model_id, name, code, photo_url, is_new, fabric, colour, leg, seat, ' +
   'modules, layout, size, height, divan, gap, qty, length_cm, width_cm, sofa_category, sofa_function, ' +
-  'source_request_id, created_at, created_by_name';
+  'source_request_id, remarks, dims_width_cm, dims_depth_cm, own_photo_updated_at, created_at, created_by_name';
 
 const cmOrNull = (v: unknown): number | null => (v == null ? null : Number(v));
 const timeOrNull = (v: unknown): string | null => (v == null ? null : String(v));
@@ -217,6 +220,12 @@ const displayToWire = (r: Record<string, unknown>, photoAt: string | null = null
   // Its photo is read through the request it arrived from.
   sourceRequestId: r.source_request_id == null ? null : String(r.source_request_id),
   photoAt,
+  // 2990-0021 (0222): typed in Marketing, kept on this display alone. The photo
+  // itself is read by GET /displays/:id/photo, never here.
+  remarks: String(r.remarks ?? ''),
+  dimsWidthCm: cmOrNull(r.dims_width_cm),
+  dimsDepthCm: cmOrNull(r.dims_depth_cm),
+  ownPhotoAt: timeOrNull(r.own_photo_updated_at),
   createdAt: String(r.created_at ?? ''),
   createdByName: r.created_by_name == null ? null : String(r.created_by_name),
 });
@@ -248,7 +257,14 @@ const displayCreateSchema = z.object({
   sofaCategory: short.optional().default(''),
   sofaFunction: short.optional().default(''),
   sourceRequestId: z.string().regex(UUID_RE).nullable().optional().default(null),
+  remarks: remarksField.optional().default(''),
+  dimsWidthCm: cm.nullable().optional().default(null),
+  dimsDepthCm: cm.nullable().optional().default(null),
+  ownPhoto: imageSchema.optional(),
 }).superRefine((v, ctx) => {
+  if ((v.dimsWidthCm == null) !== (v.dimsDepthCm == null)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['dimsWidthCm'], message: 'Width and depth go together.' });
+  }
   // A sofa on the floor is its compartments; one with none is not a display.
   if (v.type === 'sofa' && v.modules.length === 0) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['modules'], message: 'A sofa needs its components.' });
@@ -653,9 +669,21 @@ marketing.post('/displays', async (c) => {
     photoAt = v.type === 'sofa' ? timeOrNull(s.photo_updated_at) : null;
   }
   const isSofa = v.type === 'sofa';
+  const own = v.ownPhoto ? photoColumns(v.ownPhoto, new Date().toISOString()) : null;
+  if (own && !own.ok) return c.json(PHOTO_TOO_LARGE, 413);
   const { data, error } = await sb
     .from('marketing_displays')
     .insert({
+      remarks: v.remarks,
+      // The diagram's own W x D — sofa only, like length / width.
+      dims_width_cm: isSofa ? v.dimsWidthCm : null,
+      dims_depth_cm: isSofa ? v.dimsDepthCm : null,
+      ...(own?.ok ? {
+        own_photo_content_type: own.cols.photo_content_type,
+        own_photo_b64: own.cols.photo_b64,
+        own_photo_file_name: own.cols.photo_file_name,
+        own_photo_updated_at: own.cols.photo_updated_at,
+      } : {}),
       venue_id: v.venueId,
       type: v.type,
       model_id: v.modelId ?? null,
@@ -689,6 +717,71 @@ marketing.post('/displays', async (c) => {
     .single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   return c.json({ display: displayToWire(data as unknown as Record<string, unknown>, photoAt) }, 201);
+});
+
+const displayEditSchema = z.object({
+  remarks: remarksField.optional(),
+  dimsWidthCm: cm.nullable().optional(),
+  dimsDepthCm: cm.nullable().optional(),
+}).superRefine((v, ctx) => {
+  if ((v.dimsWidthCm === undefined) !== (v.dimsDepthCm === undefined) || (v.dimsWidthCm == null) !== (v.dimsDepthCm == null)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['dimsWidthCm'], message: 'Width and depth go together.' });
+  }
+  if (v.remarks === undefined && v.dimsWidthCm === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [], message: 'Nothing to change.' });
+  }
+});
+
+/** Edit what Marketing keeps on a piece: its remarks and the W x D drawn on its
+ *  diagram (null both = back to the computed size). Never the product's own
+ *  size, never another module. */
+marketing.patch('/displays/:id', async (c) => {
+  const g = await gate(c);
+  if (!g.ok) return g.res;
+  const id = c.req.param('id');
+  if (!UUID_RE.test(id)) return c.json({ error: 'not_found' }, 404);
+  const b = await readBody(c);
+  if (!b.ok) return b.res;
+  const parsed = displayEditSchema.safeParse(b.body);
+  if (!parsed.success) return c.json({ error: 'validation_failed', issues: issues(parsed.error) }, 400);
+  const v = parsed.data;
+  const { data, error } = await admin(c)
+    .from('marketing_displays')
+    .update({
+      ...(v.remarks !== undefined ? { remarks: v.remarks } : {}),
+      ...(v.dimsWidthCm !== undefined ? { dims_width_cm: v.dimsWidthCm, dims_depth_cm: v.dimsDepthCm } : {}),
+    })
+    .eq('id', id)
+    .is('removed_at', null)
+    .select(DISPLAY_SELECT)
+    .maybeSingle();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  if (!data) return c.json({ error: 'not_found', reason: 'This piece is no longer on display.' }, 404);
+  return c.json({ display: displayToWire(data as unknown as Record<string, unknown>) });
+});
+
+/** A piece's own photo (0222), one at a time — /state never carries it. */
+marketing.get('/displays/:id/photo', async (c) => {
+  const g = await gate(c);
+  if (!g.ok) return g.res;
+  const id = c.req.param('id');
+  if (!UUID_RE.test(id)) return c.json({ error: 'not_found' }, 404);
+  const { data, error } = await admin(c)
+    .from('marketing_displays')
+    .select('id, own_photo_content_type, own_photo_b64, own_photo_file_name, own_photo_updated_at')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) return c.json({ error: 'fetch_failed', reason: error.message }, 500);
+  if (!data) return c.json({ error: 'not_found' }, 404);
+  const r = data as unknown as Record<string, unknown>;
+  if (r.own_photo_b64 == null) return c.json({ photo: null });
+  return c.json({
+    photo: {
+      dataUrl: `data:${String(r.own_photo_content_type)};base64,${String(r.own_photo_b64)}`,
+      fileName: String(r.own_photo_file_name ?? ''),
+      updatedAt: String(r.own_photo_updated_at ?? ''),
+    },
+  });
 });
 
 /** "Remove from display" — stamps removed_at; the row stays as history. */

@@ -67,6 +67,14 @@ export interface DisplayItem {
   widthCm: number | null;
   sofaCategory: string;
   sofaFunction: string;
+  /** Marketing's free-text note on this piece (2990-0021). */
+  remarks: string;
+  /** The W × D printed on this piece's sofa diagram, set in Marketing; null = the
+   *  size computed from the layout. Never the product's own size. */
+  dimsWidthCm: number | null;
+  dimsDepthCm: number | null;
+  /** Version of the photo attached when it was added; null when none. */
+  ownPhotoAt: string | null;
   /** The launch request it arrived from — its photo is read through it. */
   sourceRequestId: string | null;
   /** That request's photo version (when it was uploaded); null when there is

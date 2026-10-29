@@ -365,6 +365,77 @@ describe('displays', () => {
     expect(state.inserted).toMatchObject({ layout: null });
   });
 
+  /* 2990-0021: remarks, a photo and a display-only W x D for the diagram. */
+  const DID = '6f1f6c1e-0000-4000-8000-000000000001';
+  const SHOT = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB';
+
+  it('keeps remarks, a photo and diagram dimensions with a new display, and never puts the photo on the wire', async () => {
+    meAnswers(MARKETING);
+    state.single = { id: 'd1', venue_id: '107', type: 'sofa', name: 'BOOQIT', modules: ['1S'], qty: 1, own_photo_updated_at: '2026-10-29T01:00:00Z' };
+    const res = await app().request('/marketing/displays', json('POST', {
+      venueId: '107', type: 'sofa', name: 'BOOQIT', modules: ['1S'], remarks: ' near window ',
+      dimsWidthCm: 250, dimsDepthCm: 95, ownPhoto: { contentType: 'image/png', dataB64: SHOT, fileName: 'a.png' },
+    }), env);
+    expect(res.status).toBe(201);
+    expect(state.inserted).toMatchObject({
+      remarks: 'near window', dims_width_cm: 250, dims_depth_cm: 95,
+      own_photo_content_type: 'image/png', own_photo_b64: SHOT,
+    });
+    const body = await res.json() as { display: Record<string, unknown> };
+    expect(body.display).toMatchObject({ remarks: '', dimsWidthCm: null, ownPhotoAt: '2026-10-29T01:00:00Z' });
+    expect(JSON.stringify(body)).not.toContain(SHOT);
+  });
+
+  it('refuses a display photo over 3 MB, and a width without a depth', async () => {
+    meAnswers(MARKETING);
+    const big = 'A'.repeat(Math.ceil((3 * 1024 * 1024 * 4) / 3) + 4);
+    const tooBig = await app().request('/marketing/displays', json('POST', {
+      venueId: '107', type: 'mattress', name: 'AKKA', ownPhoto: { contentType: 'image/png', dataB64: big },
+    }), env);
+    expect(tooBig.status).toBe(413);
+    const half = await app().request('/marketing/displays', json('POST', { venueId: '107', type: 'mattress', name: 'AKKA', dimsWidthCm: 200 }), env);
+    expect(half.status).toBe(400);
+    expect(state.inserted).toBeNull();
+  });
+
+  it('edits a display’s remarks and diagram dimensions, touching nothing else', async () => {
+    meAnswers(MARKETING);
+    state.maybe = { id: DID, venue_id: '107', type: 'sofa', name: 'BOOQIT', modules: ['1S'], qty: 1 };
+    const res = await app().request(`/marketing/displays/${DID}`, json('PATCH', { remarks: 'moved to window', dimsWidthCm: 300, dimsDepthCm: 100 }), env);
+    expect(res.status).toBe(200);
+    expect(state.updated).toEqual({ remarks: 'moved to window', dims_width_cm: 300, dims_depth_cm: 100 });
+  });
+
+  it('clears the diagram dimensions with nulls, and refuses nonsense or an empty edit', async () => {
+    meAnswers(MARKETING);
+    state.maybe = { id: DID, venue_id: '107', type: 'sofa', name: 'BOOQIT', modules: ['1S'], qty: 1 };
+    const reset = await app().request(`/marketing/displays/${DID}`, json('PATCH', { dimsWidthCm: null, dimsDepthCm: null }), env);
+    expect(reset.status).toBe(200);
+    expect(state.updated).toEqual({ dims_width_cm: null, dims_depth_cm: null });
+    state.updated = null;
+    for (const bad of [{ dimsWidthCm: 0, dimsDepthCm: 90 }, { dimsWidthCm: 200 }, {}]) {
+      const r = await app().request(`/marketing/displays/${DID}`, json('PATCH', bad), env);
+      expect(r.status).toBe(400);
+    }
+    expect(state.updated).toBeNull();
+  });
+
+  it('404s an edit of a display that is gone, and a bad id', async () => {
+    meAnswers(MARKETING);
+    state.maybe = null;
+    expect((await app().request(`/marketing/displays/${DID}`, json('PATCH', { remarks: 'x' }), env)).status).toBe(404);
+    expect((await app().request('/marketing/displays/nope', json('PATCH', { remarks: 'x' }), env)).status).toBe(404);
+  });
+
+  it('serves a display’s own photo on its own read', async () => {
+    meAnswers(MARKETING);
+    state.maybe = { id: DID, own_photo_content_type: 'image/png', own_photo_b64: SHOT, own_photo_file_name: 'a.png', own_photo_updated_at: 't' };
+    const res = await app().request(`/marketing/displays/${DID}/photo`, { headers: auth }, env);
+    expect(await res.json()).toEqual({ photo: { dataUrl: `data:image/png;base64,${SHOT}`, fileName: 'a.png', updatedAt: 't' } });
+    state.maybe = { id: DID, own_photo_b64: null };
+    expect(await (await app().request(`/marketing/displays/${DID}/photo`, { headers: auth }, env)).json()).toEqual({ photo: null });
+  });
+
   it('removes by stamping, not deleting', async () => {
     meAnswers(MARKETING);
     state.maybe = { id: '6f1f6c1e-0000-4000-8000-000000000001' };

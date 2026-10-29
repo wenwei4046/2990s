@@ -124,6 +124,8 @@ const displayWire = (r: Row) => ({
   sofaFunction: r.sofa_function ?? '', sourceRequestId: r.source_request_id ?? null, createdAt: r.created_at, createdByName: r.created_by_name,
   // The API's: the photo time of the request a sofa came from.
   photoAt: r.type === 'sofa' && r.source_request_id ? photos()[r.source_request_id]?.updated_at ?? null : null,
+  remarks: r.remarks ?? '', dimsWidthCm: r.dims_width_cm ?? null, dimsDepthCm: r.dims_depth_cm ?? null,
+  ownPhotoAt: photos()[`d:${r.id}`]?.updated_at ?? null,
 });
 const requestWire = (r: Row) => ({
   id: r.id, type: r.type, status: r.status, supplierCode: r.supplier_code, model: r.model, fabric: r.fabric, colour: r.colour, leg: r.leg,
@@ -324,12 +326,27 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
       qty: body.qty ?? 1, is_new: !!body.sourceRequestId, source_request_id: body.sourceRequestId ?? null,
       length_cm: sofa ? (body.lengthCm ?? null) : null, width_cm: sofa ? (body.widthCm ?? null) : null,
       sofa_category: sofa ? (body.sofaCategory ?? '') : '', sofa_function: sofa ? (body.sofaFunction ?? '') : '',
+      remarks: String(body.remarks ?? '').trim(), dims_width_cm: sofa ? (body.dimsWidthCm ?? null) : null, dims_depth_cm: sofa ? (body.dimsDepthCm ?? null) : null,
       created_at: now(), created_by_name: me.name,
     });
+    keepPhoto(`d:${row.id}`, body.ownPhoto);
     st.displays.push(row); save();
     return json({ display: displayWire(row) }, 201);
   }
+  m = /^\/marketing\/displays\/([^/]+)\/photo$/.exec(path);
+  if (m && method === 'GET') {
+    const p = photos()[`d:${m[1]}`];
+    return json({ photo: p ? { dataUrl: `data:${p.content_type};base64,${p.image_b64}`, fileName: p.file_name, updatedAt: p.updated_at } : null });
+  }
   m = /^\/marketing\/displays\/([^/]+)$/.exec(path);
+  if (m && method === 'PATCH') {
+    const row = live.find((d) => d.id === m![1]);
+    if (!row) return json({ error: 'not_found' }, 404);
+    if (body.remarks !== undefined) row.remarks = String(body.remarks).trim();
+    if (body.dimsWidthCm !== undefined) { row.dims_width_cm = body.dimsWidthCm; row.dims_depth_cm = body.dimsDepthCm; }
+    save();
+    return json({ display: displayWire(row) });
+  }
   if (m && method === 'DELETE') {
     const row = live.find((d) => d.id === m![1]);
     if (!row) return json({ error: 'not_found' }, 404);

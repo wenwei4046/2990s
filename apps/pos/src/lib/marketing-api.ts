@@ -61,6 +61,7 @@ interface WireDisplay {
   modules: string[]; size: string; height: string; divan: string; gap: string; qty: number;
   lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
   sourceRequestId?: string | null; photoAt?: string | null; layout?: SofaLayout | null;
+  remarks?: string; dimsWidthCm?: number | null; dimsDepthCm?: number | null; ownPhotoAt?: string | null;
 }
 
 interface WireRequest {
@@ -99,7 +100,8 @@ const toDisplay = (w: WireDisplay): DisplayItem => ({
   modules: w.modules ?? [], size: w.size, height: w.height, divan: w.divan, gap: w.gap, qty: w.qty || 1,
   lengthCm: w.lengthCm ?? null, widthCm: w.widthCm ?? null, sofaCategory: w.sofaCategory ?? '',
   sofaFunction: w.sofaFunction ?? '', sourceRequestId: w.sourceRequestId ?? null, photoAt: w.photoAt ?? null,
-  layout: w.layout ?? null,
+  layout: w.layout ?? null, remarks: w.remarks ?? '', dimsWidthCm: w.dimsWidthCm ?? null,
+  dimsDepthCm: w.dimsDepthCm ?? null, ownPhotoAt: w.ownPhotoAt ?? null,
 });
 
 const toRequest = (w: WireRequest): LaunchRequest => ({
@@ -253,6 +255,9 @@ export interface NewDisplay {
    *  the launch request it came from. */
   lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
   sourceRequestId?: string | null;
+  remarks?: string;
+  /** A photo attached by hand (PNG / JPG, downscaled by preparePhoto). */
+  ownPhoto?: PreparedImage;
 }
 
 export function useAddDisplay() {
@@ -261,6 +266,29 @@ export function useAddDisplay() {
     mutationFn: (d: NewDisplay) => call<{ display: WireDisplay }>('/displays', { method: 'POST', body: JSON.stringify(d) })
       .then((r) => toDisplay(r.display)),
     onSuccess: done,
+  });
+}
+
+/** Edit what Marketing keeps on a piece: remarks, and the diagram's W × D
+ *  (both null = back to the computed size). */
+export function useEditDisplay() {
+  const done = useInvalidate();
+  return useMutation({
+    mutationFn: (p: { id: string; remarks?: string; dimsWidthCm?: number | null; dimsDepthCm?: number | null }) => {
+      const { id, ...body } = p;
+      return call<{ display: WireDisplay }>(`/displays/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) });
+    },
+    onSuccess: done,
+  });
+}
+
+/** A piece's own photo as a data: URL; `version` keys the cache, null fetches nothing. */
+export function useDisplayPhoto(id: string | null, version: string | null) {
+  return useQuery<string | null>({
+    queryKey: ['marketing', 'display-photo', id, version],
+    enabled: !!id && !!version,
+    staleTime: Infinity,
+    queryFn: () => call<{ photo: { dataUrl: string } | null }>(`/displays/${encodeURIComponent(id!)}/photo`).then((r) => r.photo?.dataUrl ?? null),
   });
 }
 
