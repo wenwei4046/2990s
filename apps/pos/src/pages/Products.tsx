@@ -1881,8 +1881,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   const canAdd  = mode !== 'view';
   const canEdit = mode === 'full';
   const editMode = canEdit ? editModeRaw : false;
-  // PR #39 — Model filter chip row (visible only on Sofa view).
-  // Distinct base_model values pulled from current rows. 'all' = no filter.
+  // Keep the SKU's base_model as the filter key; display the saved Model name.
   const [modelFilter, setModelFilter] = useState<string>('all');
 
   const { data: products, isLoading, error } = useMfgProducts({
@@ -1892,6 +1891,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   // Chips come off the unfiltered list (lib/products/product-categories.ts), so
   // a search never hides one; it is the All view's own query, no extra request.
   const { data: everyProduct } = useMfgProducts();
+  const { data: productModels } = useProductModels();
   const categoryChips = useMemo(
     () => [{ value: 'all', label: 'All' }, ...productCategoryChips((everyProduct ?? []).map((p) => p.category), category)],
     [everyProduct, category],
@@ -1911,12 +1911,22 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   // list to a single Model (Hilton bedframes, Purezone mattresses, etc.).
   // ACCESSORY + SERVICE skip the filter — they don't carry a base_model.
   const supportsModelFilter = category === 'SOFA' || category === 'BEDFRAME' || category === 'MATTRESS';
-  const categoryModels = useMemo<string[]>(() => {
+  const categoryModels = useMemo<ModelFilterOption[]>(() => {
     if (!supportsModelFilter) return [];
-    const s = new Set<string>();
-    for (const r of allRows) if (r.base_model) s.add(r.base_model);
-    return Array.from(s).sort();
-  }, [allRows, supportsModelFilter]);
+    const models = (productModels ?? []).filter((model) => model.category === category);
+    const byId = new Map(models.map((model) => [model.id, model]));
+    const byCode = new Map(models.map((model) => [model.model_code, model]));
+    const names = new Map<string, string>();
+    for (const row of allRows) {
+      if (!row.base_model) continue;
+      const model = (row.model_id ? byId.get(row.model_id) : undefined) ?? byCode.get(row.base_model);
+      const name = model?.name.trim();
+      if (name || !names.has(row.base_model)) names.set(row.base_model, name || row.base_model);
+    }
+    return Array.from(names, ([code, name]) => ({ code, name })).sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) || a.code.localeCompare(b.code),
+    );
+  }, [allRows, productModels, category, supportsModelFilter]);
 
   // Apply Model filter (only when current category supports it + a specific
   // model is picked).
@@ -2659,12 +2669,14 @@ const CategoryChip = ({
 
 const MODEL_PILLS_VISIBLE_LIMIT = 12;
 
+type ModelFilterOption = { code: string; name: string };
+
 const ModelFilterRail = ({
   models,
   activeModel,
   onChange,
 }: {
-  models: string[];
+  models: ModelFilterOption[];
   activeModel: string;
   onChange: (m: string) => void;
 }) => {
@@ -2676,15 +2688,16 @@ const ModelFilterRail = ({
   // Model (non-"all") is always promoted into the inline set.
   const { inline, overflow } = useMemo(() => {
     if (models.length <= MODEL_PILLS_VISIBLE_LIMIT) {
-      return { inline: models, overflow: [] as string[] };
+      return { inline: models, overflow: [] as ModelFilterOption[] };
     }
     const head = models.slice(0, MODEL_PILLS_VISIBLE_LIMIT);
     const tail = models.slice(MODEL_PILLS_VISIBLE_LIMIT);
-    if (activeModel !== 'all' && tail.includes(activeModel)) {
+    const active = tail.find((model) => model.code === activeModel);
+    if (activeModel !== 'all' && active) {
       // Promote the active model into the visible row — swap with the last
       // inline pill so the inline count stays stable.
-      const promoted = [...head.slice(0, -1), activeModel];
-      const demoted = [head[head.length - 1]!, ...tail.filter((m) => m !== activeModel)];
+      const promoted = [...head.slice(0, -1), active];
+      const demoted = [head[head.length - 1]!, ...tail.filter((m) => m.code !== activeModel)];
       return { inline: promoted, overflow: demoted };
     }
     return { inline: head, overflow: tail };
@@ -2713,7 +2726,7 @@ const ModelFilterRail = ({
   const filteredOverflow = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return overflow;
-    return overflow.filter((m) => m.toLowerCase().includes(q));
+    return overflow.filter((m) => m.name.toLowerCase().includes(q) || m.code.toLowerCase().includes(q));
   }, [overflow, search]);
 
   return (
@@ -2735,11 +2748,11 @@ const ModelFilterRail = ({
       </CategoryChip>
       {inline.map((m) => (
         <CategoryChip
-          key={m}
-          active={activeModel === m}
-          onClick={() => onChange(m)}
+          key={m.code}
+          active={activeModel === m.code}
+          onClick={() => onChange(m.code)}
         >
-          {m}
+          {m.name}
         </CategoryChip>
       ))}
       {overflow.length > 0 && (
@@ -2817,12 +2830,12 @@ const ModelFilterRail = ({
                 )}
                 {filteredOverflow.map((m) => (
                   <button
-                    key={m}
+                    key={m.code}
                     type="button"
                     role="option"
-                    aria-selected={activeModel === m}
+                    aria-selected={activeModel === m.code}
                     onClick={() => {
-                      onChange(m);
+                      onChange(m.code);
                       setOpen(false);
                       setSearch('');
                     }}
@@ -2832,14 +2845,14 @@ const ModelFilterRail = ({
                       fontFamily: 'var(--font-sans)',
                       fontSize: 'var(--fs-13)',
                       padding: '4px var(--space-2)',
-                      background: activeModel === m ? 'var(--c-cream)' : 'transparent',
+                      background: activeModel === m.code ? 'var(--c-cream)' : 'transparent',
                       border: 'none',
                       borderRadius: 'var(--radius-sm)',
                       color: 'var(--c-ink)',
                       cursor: 'pointer',
                     }}
                   >
-                    {m}
+                    {m.name}
                   </button>
                 ))}
               </div>
