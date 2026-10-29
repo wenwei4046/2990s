@@ -1730,17 +1730,30 @@ export const useUpdateFabricTierAddonConfig = () => {
 export const useUpdateFabricLibraryTier = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, field, tier }: { id: string; field: 'sofaTier' | 'bedframeTier'; tier: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' }) => {
-      const res = await authedFetchRaw(`/fabric-library/${encodeURIComponent(id)}/tier`, {
-        method: 'PATCH',
-        body: JSON.stringify({ field, tier }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
-        throw new Error(body.reason ?? body.error ?? `PATCH /fabric-library tier failed (${res.status})`);
+    mutationFn: async ({ id, ids, field, tier }: ({ id: string; ids?: never } | { ids: string[]; id?: never }) & { field: 'sofaTier' | 'bedframeTier'; tier: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' }) => {
+      // Display series can span several legacy library IDs. Never send the
+      // display group ID to the API, and wait for every write before refetching.
+      const members = [...new Set(ids ?? [id!])];
+      const results = await Promise.allSettled(members.map(async (member) => {
+        const res = await authedFetchRaw(`/fabric-library/${encodeURIComponent(member)}/tier`, {
+          method: 'PATCH',
+          body: JSON.stringify({ field, tier }),
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+          throw new Error(body.reason ?? body.error ?? `PATCH /fabric-library tier failed (${res.status})`);
+        }
+      }));
+      const failures = results.flatMap((result, i) => result.status === 'rejected'
+        ? [`${members[i]}: ${String(result.reason instanceof Error ? result.reason.message : result.reason)}`]
+        : []);
+      if (failures.length) {
+        throw new Error(`Could not update ${failures.join('; ')}. Saved tiers have been reloaded; retry to finish updating the series.`);
       }
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fabric-library'] }); },
+    // A partial failure must also reload: the table will show Mixed rather
+    // than pretending the group was all saved or all rolled back.
+    onSettled: () => qc.invalidateQueries({ queryKey: ['fabric-library'] }),
   });
 };
 

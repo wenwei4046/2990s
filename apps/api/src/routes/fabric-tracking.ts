@@ -268,6 +268,18 @@ fabricTracking.get('/', async (c) => {
   return c.json({ fabrics: data ?? [] });
 });
 
+// Display-only fabric metadata, matching the Houzs /fabric-tracking/lite
+// contract used by POS. Existing authentication and table RLS still apply;
+// procurement prices and stock are deliberately absent from this response.
+fabricTracking.get('/lite', async (c) => {
+  const { data, error } = await c.get('supabase')
+    .from('fabric_trackings')
+    .select('fabric_code, series')
+    .order('fabric_code', { ascending: true });
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  return c.json({ fabrics: data ?? [] });
+});
+
 /* Migration 0167 — ACTIVE toggle from the Fabric Converter table (owner spec
    2026-06-12). Inactive fabrics are hidden from NEW-entry fabric pickers
    (SO/CO variant selects, scan-SO catalog injection); existing documents keep

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { FabricAllowedSection } from './FabricAllowedSection';
+import { groupFabricSeries } from '../../lib/fabric-series-groups';
 
 afterEach(cleanup);
 
@@ -33,6 +34,29 @@ const header = (name: RegExp) => screen.getByRole('button', { name });
 const panelOf = (name: RegExp) => document.getElementById(header(name).getAttribute('aria-controls')!)!;
 
 describe('FabricAllowedSection', () => {
+  it('bulk-enables the original colour codes under the saved series name', () => {
+    const grouped = groupFabricSeries(
+      [{ id: 'BROWNIE', label: 'BROWNIE' }],
+      ['BROWNIE-01', 'BROWNIE-02'].map((colourId) => ({ fabricId: 'BROWNIE', colourId, label: colourId })),
+      ['BROWNIE-01', 'BROWNIE-02'].map((fabric_code) => ({ fabric_code, series: 'HOMELY' })),
+    );
+    let saved: string[] = [];
+    render(<FabricAllowedSection {...grouped} isTicked={() => false} onToggle={() => {}} onSetAll={(codes) => { saved = codes; }} />);
+    expect(header(/^HOMELY 0\/2 active/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'All on' }));
+    expect(saved).toEqual(['BROWNIE-01', 'BROWNIE-02']);
+  });
+
+  it('waits for saved series and shows load failures without offering fallback bulk controls', () => {
+    const props = { series: SERIES, coloursBySeries: COLOURS, isTicked: () => false, onToggle: () => {}, onSetAll: () => {} };
+    const { rerender } = render(<FabricAllowedSection {...props} isLoading />);
+    expect(screen.getByText('Loading fabrics…')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'All on' })).not.toBeInTheDocument();
+    rerender(<FabricAllowedSection {...props} error={new Error('unavailable')} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('unavailable');
+    expect(screen.queryByRole('button', { name: 'All on' })).not.toBeInTheDocument();
+  });
+
   it('starts collapsed and counts what the Model already has on', () => {
     render(<Harness initial={['KN02']} />);
     expect(header(/^KN 1\/2 active/)).toHaveAttribute('aria-expanded', 'false');
