@@ -184,8 +184,8 @@ describe('shared catalog requests', () => {
     await waitFor(() => expect(result.current.picks.isSuccess && result.current.combos.isSuccess).toBe(true));
     expect(rawApi).toHaveBeenCalledTimes(2);
     expect(rawApi.mock.calls.map(([path]) => path)).toEqual(expect.arrayContaining([
-      '/pos-pools/sofa-combos?baseModel=TEST&customerId=__all__',
-      '/sofa-quick-picks?baseModel=TEST',
+      '/pos-pools/sofa-combos?baseModel=TEST&customerId=__all__&includeAccessories=1',
+      '/sofa-quick-picks?baseModel=TEST&includeAccessories=1',
     ]));
   });
 

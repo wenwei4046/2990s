@@ -2275,6 +2275,7 @@ export const useSofaCombos = (baseModel?: string | null, opts?: { enabled?: bool
       const params = new URLSearchParams();
       if (baseModel) params.set('baseModel', baseModel);
       params.set('customerId', '__all__');  // 2990 is B2C — only default-scope rows
+      params.set('includeAccessories', '1');
       // POS may render anonymously (no token) or with the API base unset —
       // authedFetchRaw throws in both cases; combos are optional so quietly
       // return []. A non-ok status also degrades to [] (Quick Pick still works).
@@ -2388,6 +2389,7 @@ export const useSofaQuickPicks = (baseModel?: string | null, opts?: { enabled?: 
     queryFn: async (): Promise<SofaQuickPickRow[]> => {
       const params = new URLSearchParams();
       if (baseModel) params.set('baseModel', baseModel);
+      params.set('includeAccessories', '1');
       // POS may render anonymously (no token) or with the API base unset —
       // authedFetchRaw throws in both cases; Quick Picks are optional so quietly
       // return []. A non-ok status also degrades to [].

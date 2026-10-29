@@ -585,6 +585,9 @@ identities and child `sofaAccessoryOfKey` / `sofaAccessoryPieceIds`; Houzs verif
 the actual child SKUs and quantities before it grants inclusion. Client inclusion
 flags are display-only. This needs the coordinated Houzs schema/API/recompute
 release; the old 2990 API deliberately refuses saves containing accessories.
+The new POS opts into accessory-aware lists with `includeAccessories=1`. Houzs
+hides inclusive combos and accessory-bearing Quick Picks from older cached POS
+clients, which would otherwise ignore the pieces and misprice the set.
 
 Global and personal Quick Picks carry `layout: { cells, accessories }` alongside
 legacy modules/depth. Restore stable cell/piece identities, positions and colours;

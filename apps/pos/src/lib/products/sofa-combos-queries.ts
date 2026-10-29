@@ -74,6 +74,8 @@ export function useSofaCombos(filters: ComboFilters = {}) {
       if (filters.baseModel) params.set('baseModel', filters.baseModel);
       if (filters.customerId === null) params.set('customerId', '__all__');
       else if (filters.customerId) params.set('customerId', filters.customerId);
+      // Cached older POS builds cannot interpret accessory requirements.
+      params.set('includeAccessories', '1');
       const qs = params.toString();
       return authedFetch<{ rules: SofaComboRule[] }>(
         `${COMBOS_PATH}${qs ? `?${qs}` : ''}`,

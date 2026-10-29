@@ -42,6 +42,7 @@ export const useMyQuickPicks = (userId?: string | null, baseModel?: string | nul
     queryFn: async (): Promise<PersonalQuickPickRow[]> => {
       const params = new URLSearchParams();
       if (baseModel) params.set('baseModel', baseModel);
+      params.set('includeAccessories', '1');
       const body = await authedFetch<PicksResponse>(`/personal-quick-picks?${params.toString()}`);
       return body.picks;
     },
