@@ -18,6 +18,7 @@ vi.mock('../lib/queries', () => ({
     { id: 'accessory', label: 'Accessories', tbc: false },
   ] }),
 }));
+vi.mock('../lib/products/product-models-queries', () => ({ useProductModels: () => ({ data: [] }) }));
 vi.mock('../lib/staff', () => ({ useStaff: () => ({}), isPosSalesRole: () => false }));
 vi.mock('../lib/houzs-perms', () => ({
   useHrAccess: () => ({ canRead: false }),

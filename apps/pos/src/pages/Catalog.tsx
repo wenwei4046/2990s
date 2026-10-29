@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow, type MfgCatalogCategory, type CategoryRow } from '../lib/queries';
+import { useProductModels } from '../lib/products/product-models-queries';
+import { withCatalogModelPresentation } from '../lib/catalog-model-presentation';
 import { useStaff, isPosSalesRole } from '../lib/staff';
 import { useHrAccess, useMaintainAccess, useMarketingAccess } from '../lib/houzs-perms';
 import { useMarketingState } from '../lib/marketing-api';
@@ -218,6 +220,9 @@ function buildCards(rows: MfgCatalogRow[]): CatalogCard[] {
 export const Catalog = () => {
   const isPhone = useMediaQuery('(max-width: 767px)');
   const catalog = useMfgCatalog();
+  // The company-scoped list contains display/config metadata only. Share its
+  // cache with Modular and load in parallel; selling rows can render immediately.
+  const models = useProductModels({ refetchInterval: 30_000 });
   const { data: staff } = useStaff();
   /* The OPEX section's own gate — the Houzs `scm.hr.read` key, not the POS role.
      Cached for 5 minutes and shared with the route guard, so this costs one
@@ -291,7 +296,10 @@ export const Catalog = () => {
   const setActiveCat = (c: string) => setParam('cat', c);
   const setActiveBranding = (b: string) => setParam('brand', b);
 
-  const rows = catalog.data ?? EMPTY_ROWS;
+  const rows = useMemo(
+    () => withCatalogModelPresentation(catalog.data ?? EMPTY_ROWS, models.data ?? []),
+    [catalog.data, models.data],
+  );
   const cards = useMemo(() => buildCards(rows), [rows]);
 
   /* Sofa-exclusivity (Commander 2026-05-30): a sofa is sold on its own ticket.

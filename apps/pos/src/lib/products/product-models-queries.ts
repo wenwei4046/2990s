@@ -3,11 +3,18 @@
 // Sister file to mfg-products-queries.ts — same authedFetch + cache conventions.
 // ----------------------------------------------------------------------------
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { MfgCategory } from './mfg-products-queries';
 import type { SofaAccessoryPlacement } from '../sofa-accessories';
 
 import { authedFetch } from '../apiClient';
+
+// Model metadata also appears on the selling catalogue and its cached raw
+// response. Both need refreshing after a model or its cover photo changes.
+const invalidateCatalog = (qc: QueryClient) => Promise.all([
+  qc.invalidateQueries({ queryKey: ['mfg-catalog'] }),
+  qc.invalidateQueries({ queryKey: ['mfg-catalog-request'] }),
+]);
 
 export type ProductModelRow = {
   id: string;
@@ -75,15 +82,21 @@ export type ModelSkuRow = {
   one_shot?: boolean;
 };
 
-export function useProductModels(opts?: { category?: MfgCategory }) {
+export function useProductModels(opts?: {
+  category?: MfgCategory;
+  enabled?: boolean;
+  refetchInterval?: number | false;
+}) {
   return useQuery({
     queryKey: ['product-models', opts?.category ?? 'all'],
+    enabled: opts?.enabled,
     queryFn: async () => {
       const qs = opts?.category ? `?category=${opts.category}` : '';
       const res = await authedFetch<{ models: ProductModelRow[] }>(`/product-models${qs}`);
       return res.models;
     },
     staleTime: 30_000,
+    refetchInterval: opts?.refetchInterval,
     retry: 1,
     retryDelay: 800,
   });
@@ -119,9 +132,10 @@ export function useCreateProductModel() {
         body: JSON.stringify(body),
       });
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['product-models'] });
-    },
+    onSuccess: () => Promise.all([
+      qc.invalidateQueries({ queryKey: ['product-models'] }),
+      invalidateCatalog(qc),
+    ]),
   });
 }
 
@@ -144,12 +158,13 @@ export function useUpdateProductModel() {
         body: JSON.stringify(body),
       });
     },
-    onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: ['product-models'] });
-      qc.invalidateQueries({ queryKey: ['product-models', vars.id] });
+    onSuccess: (_, vars) => Promise.all([
+      qc.invalidateQueries({ queryKey: ['product-models'] }),
+      qc.invalidateQueries({ queryKey: ['product-models', vars.id] }),
+      invalidateCatalog(qc),
       // Activating a sofa compartment may auto-create its SKU server-side
       // (Chairman 2026-06-02) — refresh SKU Master so the new SKU shows up.
-      qc.invalidateQueries({ queryKey: ['mfg-products'] });
+      qc.invalidateQueries({ queryKey: ['mfg-products'] }),
       // allowed_options drives the POS configurator's per-SKU option pools
       // (legs / sizes / compartments / fabrics / specials). Those queries are
       // keyed by SKU id, NOT model id, so the model invalidations above don't
@@ -157,13 +172,13 @@ export function useUpdateProductModel() {
       // Allowed Options drawer never reaches the configurator until the 30s
       // staleTime lapses or the app reloads ("save did nothing", 2026-06-16).
       // Invalidate by key PREFIX so every affected SKU of this Model refetches.
-      qc.invalidateQueries({ queryKey: ['sofa-leg-heights'] });
-      qc.invalidateQueries({ queryKey: ['bedframe-customizer-data'] });
-      qc.invalidateQueries({ queryKey: ['sofa-customizer-data'] });
-      qc.invalidateQueries({ queryKey: ['model-allowed-fabrics'] });
-      qc.invalidateQueries({ queryKey: ['model-allowed-specials'] });
-      qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === 'product' && q.queryKey[2] === 'sizes' });
-    },
+      qc.invalidateQueries({ queryKey: ['sofa-leg-heights'] }),
+      qc.invalidateQueries({ queryKey: ['bedframe-customizer-data'] }),
+      qc.invalidateQueries({ queryKey: ['sofa-customizer-data'] }),
+      qc.invalidateQueries({ queryKey: ['model-allowed-fabrics'] }),
+      qc.invalidateQueries({ queryKey: ['model-allowed-specials'] }),
+      qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === 'product' && q.queryKey[2] === 'sizes' }),
+    ]),
   });
 }
 
@@ -205,9 +220,10 @@ export function useDeleteProductModel() {
     mutationFn: async (id: string) => {
       return authedFetch<{ ok: true }>(`/product-models/${id}`, { method: 'DELETE' });
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['product-models'] });
-    },
+    onSuccess: () => Promise.all([
+      qc.invalidateQueries({ queryKey: ['product-models'] }),
+      invalidateCatalog(qc),
+    ]),
   });
 }
 
@@ -234,10 +250,11 @@ export function useUploadProductModelPhoto() {
         { method: 'POST', body: fd },
       );
     },
-    onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: ['product-models'] });
-      qc.invalidateQueries({ queryKey: ['product-models', vars.id] });
-    },
+    onSuccess: (_, vars) => Promise.all([
+      qc.invalidateQueries({ queryKey: ['product-models'] }),
+      qc.invalidateQueries({ queryKey: ['product-models', vars.id] }),
+      invalidateCatalog(qc),
+    ]),
   });
 }
 
@@ -247,9 +264,10 @@ export function useDeleteProductModelPhoto() {
     mutationFn: async (id: string) => {
       return authedFetch<{ ok: true }>(`/product-models/${id}/photo`, { method: 'DELETE' });
     },
-    onSuccess: (_, id) => {
-      qc.invalidateQueries({ queryKey: ['product-models'] });
-      qc.invalidateQueries({ queryKey: ['product-models', id] });
-    },
+    onSuccess: (_, id) => Promise.all([
+      qc.invalidateQueries({ queryKey: ['product-models'] }),
+      qc.invalidateQueries({ queryKey: ['product-models', id] }),
+      invalidateCatalog(qc),
+    ]),
   });
 }
