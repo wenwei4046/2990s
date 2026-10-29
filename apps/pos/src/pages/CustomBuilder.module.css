@@ -36,6 +36,11 @@
 .palette:not([open]) { display: none; }
 
 .priceActions { display: flex; gap: 8px; align-items: center; }
+
+@media (min-width: 768px) {
+  .priceBar { flex-wrap: wrap; }
+  .priceActions { flex-wrap: wrap; margin-left: auto; max-width: 100%; justify-content: flex-end; }
+}
 .mobilePaletteHead,
 .mobileCanvasActions,
 .mobileModuleTools,

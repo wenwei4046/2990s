@@ -170,6 +170,17 @@ When porting this to React + Vite + RR7:
 
 These are intentional changes from the prototype's current state. Anything not on this list is a regression and must be reverted to the prototype's behaviour.
 
+### Customize · Add to Combo Price · 30 October 2026
+
+Owner requested an Add to Combo Price action beside Save as Quick Pick for
+Sales Director-level price editors. Use the existing Maintain permission
+(including Houzs's resolved configuration-write permission). One complete sofa
+opens the selling-price dialog with its modules, Model and current size filled
+in; preserve sen precision and keep separately charged upgrades out of the base
+price. Save through the POS combo endpoint and refresh combo pricing. Ordinary
+sales staff retain their existing Quick Pick action. Price actions may wrap on
+tablets to accommodate the additional button.
+
 ### SKU Master model filter names · 30 October 2026
 
 Owner requested the POS SKU Master model filter rail to follow the Model name.

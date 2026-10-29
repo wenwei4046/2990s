@@ -8,6 +8,7 @@ import type { FabricColourRow, FabricLibraryRow, SofaCustomizerData } from '../l
 
 vi.mock('../lib/supabase', () => ({ supabase: {} }));
 vi.mock('../lib/staff', () => ({ useStaff: () => ({ data: null }), isGlobalCurator: () => false }));
+vi.mock('../lib/houzs-perms', () => ({ useMaintainAccess: () => ({ canMaintain: false, isLoading: false }) }));
 import { CustomBuilder } from './CustomBuilder';
 import { useCart } from '../state/cart';
 
