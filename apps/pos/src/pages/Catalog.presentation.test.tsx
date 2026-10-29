@@ -133,12 +133,12 @@ describe('Catalog Model presentation', () => {
 
   it('shows the placeholder after the saved photo is removed instead of restoring the cached photo', () => {
     const view = render(tree());
-    expect(screen.getByRole('link', { name: /BOONTAL/ }).querySelector('[style*="background-image"]')).not.toBeNull();
+    expect(screen.getByRole('link', { name: /BOONTAL/ }).querySelector('img')).not.toBeNull();
     mocks.models.data = [model({ photo_url: null })];
     view.rerender(tree());
 
     const card = screen.getByRole('link', { name: /BOONTAL/ });
-    expect(card.querySelector('[style*="background-image"]')).toBeNull();
+    expect(card.querySelector('img')).toBeNull();
     expect(within(card).getByText('No photo')).toBeInTheDocument();
     expect(within(card).getByText('B')).toBeInTheDocument();
     expect(card.innerHTML).not.toContain('old-sofa.jpg');
