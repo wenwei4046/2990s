@@ -360,13 +360,14 @@ export const Configurator = () => {
    * in which case CustomBuilder falls back to the legacy
    * product_compartments tick map. Realtime keeps it in sync with commander's
    * Backend edits without a refresh. */
-  const sofaCustomizer = useSofaCustomizerData(productId);
+  const sofaProductId = pricingKind && pricingKind !== 'sofa_build' ? undefined : productId;
+  const sofaCustomizer = useSofaCustomizerData(sofaProductId);
   useSofaCustomizerRealtime(productId);
   // Sofa leg height (Loo 2026-06-03) — options + SELLING price from the master
   // sofaLegHeights pool ∩ this Model's allowed_options.leg_heights. Lifted here
   // so it survives the Quick Pick ⇄ Customize toggle (like sofaSpecialSel) and
   // both modes' rails + all three add paths read one source.
-  const sofaLegOpts = useSofaLegHeights(productId);
+  const sofaLegOpts = useSofaLegHeights(sofaProductId);
   const [sofaLegValue, setSofaLegValue] = useState<string | null>(null);
 
   const [picked, setPicked] = useState<string | null>(null);
@@ -871,12 +872,14 @@ export const Configurator = () => {
   // • Legacy UUID products: use useProductFabrics as before (product_fabrics rows).
   // Declared here (before the edit-hydration useEffect) so it's in scope for both
   // the hydration logic and the FabricColourPicker render below.
-  // Sofa enabled fabric colour codes: mfg → the Model's allowed_options.fabrics
-  // (via sofaCustomizer); legacy UUID products keep their product_fabrics rows
-  // (no colour gate). Empty → "No fabrics enabled".
+  // The product already carries its Model's fabric gate. Show fabrics while
+  // module prices/accessories are still loading; once resolved, prefer the
+  // customizer's refreshed gate. Legacy products keep product_fabrics rows.
   const sofaFabricCodes = useMemo<string[]>(
-    () => (productId?.startsWith('mfg-') ? (sofaCustomizer.data?.fabricIds ?? []) : []),
-    [productId, sofaCustomizer.data],
+    () => (productId?.startsWith('mfg-')
+      ? (sofaCustomizer.data?.fabricIds ?? product.data?.model_allowed_options?.fabrics ?? [])
+      : []),
+    [productId, sofaCustomizer.data, product.data],
   );
   const derivedFabricRows = useMemo<ProductFabricRow[]>(() => {
     if (!productId?.startsWith('mfg-')) return productFabrics.data ?? [];
@@ -2020,14 +2023,20 @@ export const Configurator = () => {
   // still demands fabricCode + legHeight before a Processing date / Proceed
   // (shared so-variant-rule, API 409 variants_incomplete), so the order can't
   // reach production unconfirmed.
-  const canAddSofa =
+  // Showing options early must not let a restored/quick-pick build commit
+  // before its initial prices or required-accessory rules have arrived.
+  const sofaSellingDataReady = sofaCustomizer.data !== undefined
+    && sofaCombosQ.data !== undefined
+    && (!fabricSel || (addonCfgQ.data !== undefined
+      && modelOverridesQ.data !== undefined && compartmentOverridesQ.data !== undefined));
+  const canAddSofa = sofaSellingDataReady &&
     ((pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null) ||
      (pickedQP != null && qpPickPrice > 0))
     && !qpStillNeeded && !piecesLoading;
 
   // Bundle Quick Pick → Add to Cart.
   const handleAddSofa = () => {
-    if (pickedSofaRow == null || pickedSofaRow.price == null) return;
+    if (!canAddSofa || pickedSofaRow == null || pickedSofaRow.price == null) return;
     const lShape = isLShapeBundle(pickedSofaRow.bundle.id);
     const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel ?? 'Colour KIV'}` : '';
     const snapshot: SofaConfigSnapshot = {
@@ -2075,6 +2084,7 @@ export const Configurator = () => {
   // line carries the exact modular arrangement (and the engine reprices it,
   // applying any matched Combo, server-side on submit).
   const handleAddQuickPick = () => {
+    if (!canAddSofa) return;
     if (pickedQP == null || effectiveQPModules == null) return;
     const cells = qpCells;
     const label = qpDisplayLabel;
@@ -2625,6 +2635,10 @@ export const Configurator = () => {
             initialFabric={fabricSel}
             initialAccessories={isEditing && editingLine?.config.kind === 'sofa' ? editingLine.config.accessories : undefined}
             modelCustomizer={modelCustomizerForDepth}
+            modelCustomizerState={sofaCustomizer.data !== undefined ? 'ready' : sofaCustomizer.isError ? 'error' : 'pending'}
+            onRetryCustomizer={() => { void sofaCustomizer.refetch(); }}
+            enabledFabricCodes={productId?.startsWith('mfg-') ? sofaFabricCodes : undefined}
+            sellingDataReady={sofaSellingDataReady}
             baseModel={p.base_model ?? undefined}
             modelId={(p as { model_id?: string | null }).model_id ?? null}
             pwpBlock={sofaPwpRailSection}

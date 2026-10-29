@@ -118,6 +118,60 @@ describe('catalog-to-configurator loading', () => {
 });
 
 describe('shared catalog requests', () => {
+  it('uses a fresh catalog Model immediately but still loads unfiltered module selling prices', async () => {
+    const { qc, wrapper } = setup();
+    seedCatalog(qc, sku());
+    const prices = deferred<{ products: MfgCatalogApiRow[] }>();
+    api.mockImplementation((path: string) => {
+      if (path.includes('?baseModel=')) return prices.promise;
+      if (path.startsWith('/maintenance-config/')) return Promise.resolve({ data: {} });
+      throw new Error(`Unexpected request ${path}`);
+    });
+    const { result } = renderHook(() => ({
+      customizer: useSofaCustomizerData('mfg-sofa'),
+      fabrics: useModelAllowedFabricCodes('mfg-sofa'),
+      specials: useModelAllowedSpecials('mfg-sofa'),
+    }), { wrapper });
+    await waitFor(() => expect(result.current.fabrics.data).toEqual(['F1']));
+    expect(result.current.specials.data).toEqual(['S1']);
+    expect(api).toHaveBeenCalledTimes(2);
+    expect(api).toHaveBeenCalledWith('/pos-pools/mfg-catalog?baseModel=TEST&category=SOFA');
+    expect(result.current.customizer.isLoading).toBe(true);
+    await act(async () => prices.resolve({ products: [sku({
+      status: 'INACTIVE', pos_active: false, sell_price_sen: 234500,
+    })] }));
+    await waitFor(() => expect(result.current.customizer.data?.compartments[0]?.priceSen).toBe(234500));
+    expect(result.current.customizer.data?.fabricIds).toEqual(['F1']);
+    expect(api.mock.calls.some(([path]) => path.includes('?id='))).toBe(false);
+  });
+
+  it.each(['stale', 'invalidated', 'missing'] as const)('reloads %s catalog model metadata while the master pool loads independently', async (condition) => {
+    const { qc, wrapper } = setup();
+    if (condition !== 'missing') seedCatalog(qc, sku(), Date.now() - (condition === 'stale' ? 31_000 : 0));
+    if (condition === 'invalidated') await qc.invalidateQueries({ queryKey: ['mfg-catalog'] });
+    const lead = deferred<{ products: MfgCatalogApiRow[] }>();
+    const master = deferred<{ data: Record<string, unknown> }>();
+    api.mockImplementation((path: string) => {
+      if (path.includes('?id=')) return lead.promise;
+      if (path.startsWith('/maintenance-config/')) return master.promise;
+      if (path.includes('?baseModel=')) return Promise.resolve({ products: [sku()] });
+      throw new Error(`Unexpected request ${path}`);
+    });
+    const { result } = renderHook(() => useSofaCustomizerData('mfg-sofa'), { wrapper });
+    // Both requests start while the lead-SKU response is still pending.
+    expect(api).toHaveBeenCalledTimes(2);
+    expect(api).toHaveBeenCalledWith('/pos-pools/mfg-catalog?id=mfg-sofa');
+    expect(api).toHaveBeenCalledWith('/maintenance-config/resolved?scope=master');
+    const current = sku();
+    current.product_models!.allowed_options!.fabrics = ['CURRENT'];
+    await act(async () => lead.resolve({ products: [current] }));
+    // The sibling prices also start before the slower master response finishes.
+    await waitFor(() => expect(api).toHaveBeenCalledWith('/pos-pools/mfg-catalog?baseModel=TEST&category=SOFA'));
+    expect(result.current.isLoading).toBe(true);
+    await act(async () => master.resolve({ data: {} }));
+    await waitFor(() => expect(result.current.data?.fabricIds).toEqual(['CURRENT']));
+  });
+
   it('waits for the model before fetching enabled combo and Quick Pick queries', async () => {
     const { wrapper } = setup();
     rawApi.mockImplementation(async () => new Response(JSON.stringify({ combos: [], picks: [] })));

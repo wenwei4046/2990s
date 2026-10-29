@@ -34,7 +34,7 @@ export type MfgAllowedOptions = {
 async function fetchModelAllowedOptions(productId: string, qc: QueryClient): Promise<MfgAllowedOptions | null> {
   // The selling-only catalog endpoint already joins the model. Loading both
   // complete admin lists made every fabric/leg/special picker repeat two requests.
-  const sku = (await fetchMfgCatalog({ id: productId }, qc))[0];
+  const sku = await fetchMfgLeadSku(productId, qc);
   const model = Array.isArray(sku?.product_models) ? sku.product_models[0] : sku?.product_models;
   return model?.allowed_options ?? null;
 }
@@ -112,6 +112,19 @@ export async function fetchMfgCatalog(params?: Record<string, string>, qc?: Quer
     gcTime: 0,
     retry: false,
   });
+}
+
+/** Reuse the catalog's joined Model while its existing 30s snapshot is fresh.
+ *  This only resolves a lead SKU/options; module prices must still use the
+ *  unfiltered sibling scope because off-shelf SKUs are absent from the catalog.
+ *  Never extend the source timestamp or reuse an explicitly invalidated list. */
+async function fetchMfgLeadSku(productId: string, qc: QueryClient): Promise<MfgCatalogApiRow | null> {
+  const catalog = qc.getQueryState<MfgCatalogRow[]>(['mfg-catalog']);
+  if (catalog && !catalog.isInvalidated && Date.now() - catalog.dataUpdatedAt < 30_000) {
+    const row = catalog.data?.find((r) => r.id === productId)?.sourceRow;
+    if (row) return row;
+  }
+  return (await fetchMfgCatalog({ id: productId }, qc))[0] ?? null;
 }
 
 export interface CatalogProduct {
@@ -1294,36 +1307,35 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) => {
       // as the original unfiltered query intended (HARD RULE 5). SELLING-only:
       // sell_price_sen + seat_height_prices[].sellingPriceSen; the endpoint strips
       // the per-height cost (priceSen) so nothing here can leak or misprice on cost.
-      // Step 1: resolve the SKU → Model. mfg_products carries the model_id FK.
-      const sku = (await fetchMfgCatalog({ id: leadSkuId }, qc))[0] ?? null;
-      if (!sku) return null;
+      // Start the master pool immediately, including on a cold product URL.
+      // The model lookup and sibling reads can then proceed without waiting
+      // for metadata, and metadata no longer waits for the model lookup.
+      const [modelData, resolved] = await Promise.all([
+        (async () => {
+          // Step 1: resolve the SKU → Model. A recent catalog already carries
+          // this join, so opening Customize need not fetch the lead SKU again.
+          const sku = await fetchMfgLeadSku(leadSkuId, qc);
+          if (!sku) return null;
+          const model = Array.isArray(sku.product_models)
+            ? sku.product_models[0]
+            : sku.product_models;
+          if (!model || sku.category !== 'SOFA') return null;
 
-      const model = Array.isArray(sku.product_models)
-        ? sku.product_models[0]
-        : sku.product_models;
-      if (!model || sku.category !== 'SOFA') return null;
-
-      // Per-Model module SELLING prices (SOFA-SELLING-PLAN, Chairman
-      // 2026-05-31). Each module of this Model is its own mfg SKU (e.g.
-      // BOOQIT-2A(LHF)); its `sell_price_sen` IS the per-Model module price the
-      // Master Admin sets. Build the SAME normalized module→sen map the server
-      // drift gate uses (shared `sofaModulePricesFromSkus`) so the live total
-      // and the server price from one source. Replaces the old global
-      // sofaCompartmentMeta.defaultPriceCenti read.
-      //
-      // Scope by base_model (= model_code) — the SAME key the server uses
-      // (loadModelSofaModulePrices) and the same key combo scoping uses, so the
-      // POS and server SKU sets are identical by construction (not just for
-      // today's data). model_code === base_model on every sofa SKU.
-      // Once the model is known these reads are independent. Keep the unfiltered
-      // sibling scope for prices; the shelf catalog omits off-shelf modules.
-      const [skuPriceRows, resolved, accessoryRows] = await Promise.all([
-        fetchMfgCatalog({ baseModel: model.model_code, category: 'SOFA' }, qc),
+          // Per-Model module SELLING prices use the SAME unfiltered base_model
+          // scope as the server's loadModelSofaModulePrices. The shelf catalog
+          // cannot supply these: it omits off-shelf module SKUs.
+          const [skuPriceRows, accessoryRows] = await Promise.all([
+            fetchMfgCatalog({ baseModel: model.model_code, category: 'SOFA' }, qc),
+            Promise.all(readSofaAccessoryIds(model.allowed_options).map((id) =>
+              fetchMfgCatalog({ modelId: id }, qc).catch(() => []),
+            )),
+          ]);
+          return { model, skuPriceRows, accessoryRows };
+        })(),
         fetchMasterMaintenance(qc),
-        Promise.all(readSofaAccessoryIds(model.allowed_options).map((id) =>
-          fetchMfgCatalog({ modelId: id }, qc).catch(() => []),
-        )),
       ]);
+      if (!modelData) return null;
+      const { model, skuPriceRows, accessoryRows } = modelData;
       // Raw per-module SELLING rows. The flat `modulePrices` (depth/tier-agnostic
       // sell_price_sen) is the fallback; the Configurator rebuilds a depth-aware
       // P1 selling map from `sellingRows` so the per-seat-size grid price reaches
