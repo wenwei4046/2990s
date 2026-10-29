@@ -4,7 +4,7 @@
 
 export interface SeriesRef { id: string; label: string }
 export interface ColourRef { fabricId: string; colourId: string; label: string }
-export interface ColourChip { colourId: string; label: string }
+export interface ColourChip { fabricId: string; colourId: string; label: string }
 export interface FabricSeriesName { fabric_code: string; series: string | null }
 
 /** "KN01 Smoky Blue", or just "HG1313-01" when there is no name. */
@@ -68,7 +68,7 @@ export function groupFabricSeries<T extends SeriesRef>(
     if (c) {
       const rows = chips.get(group.id)!;
       if (!rows.some((row) => row.colourId === c.colourId)) {
-        rows.push({ colourId: c.colourId, label: colourText(c) });
+        rows.push({ fabricId: c.fabricId, colourId: c.colourId, label: colourText(c) });
       }
     }
   };

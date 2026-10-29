@@ -71,6 +71,7 @@ const mount = (overrides: Partial<Props> = {}) => {
   clients.push(client);
   client.setQueryData(['fabric-library'], FABRICS);
   client.setQueryData(['fabric-colours'], COLOURS);
+  client.setQueryData(['fabric-series-names'], []);
   client.setQueryData(['product', PRODUCT_ID, 'fabrics'], []);
   client.setQueryData(['fabric-tier-addon-config'], {
     sofaTier2Delta: 100, sofaTier3Delta: 200, bedframeTier2Delta: 100, bedframeTier3Delta: 200,

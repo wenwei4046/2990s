@@ -24,6 +24,9 @@ vi.mock('../lib/queries', () => ({
   useFabricLibrary: () => ({ data: LIB, isLoading: false }),
   useFabricColours: () => ({ data: COLOURS, isLoading: false }),
 }));
+vi.mock('../lib/fabric-series-queries', () => ({
+  useFabricSeriesNames: () => ({ data: [], isLoading: false, isError: false }),
+}));
 
 import { FabricColourPicker, type FabricSelection } from './FabricColourPicker';
 
@@ -42,6 +45,7 @@ const Host = ({ onSel }: { onSel?: (s: FabricSelection | null) => void }) => {
     <FabricColourPicker
       productFabrics={PRODUCT_FABRICS}
       fabricId={sel?.fabricId ?? null}
+      fabricLabel={sel?.fabricLabel ?? null}
       colourId={sel?.colourId ?? null}
       onChange={update}
       category="SOFA"
