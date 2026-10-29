@@ -1599,6 +1599,7 @@ export const CustomBuilder = ({ toolbarTarget, productId, productName, pricing, 
           <FabricColourPicker
             productFabrics={fabricSeriesRows}
             fabricId={fabricSel?.fabricId ?? null}
+            fabricLabel={fabricSel?.fabricLabel ?? null}
             colourId={fabricSel?.colourId ?? null}
             onChange={(next) => {
               setFabricSel(next);
@@ -2495,6 +2496,7 @@ export const CustomBuilder = ({ toolbarTarget, productId, productName, pricing, 
                 <FabricColourPicker
                   productFabrics={fabricSeriesRows}
                   fabricId={piece.fabric?.fabricId ?? null}
+                  fabricLabel={piece.fabric?.fabricLabel ?? null}
                   colourId={piece.fabric?.colourId ?? null}
                   onChange={(sel) => setAccessoryFabric(piece.id, {
                     fabricId: sel.fabricId,

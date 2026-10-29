@@ -286,6 +286,7 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
   const [fabricSel, setFabricSel] = useState<FabricSelection | null | undefined>(undefined);
   const fabricTouched = fabricSel !== undefined;
   const shownFabricId = fabricTouched ? (fabricSel?.fabricId ?? null) : ((v.fabricId as string | undefined) ?? null);
+  const shownFabricLabel = fabricTouched ? (fabricSel?.fabricLabel ?? null) : ((v.fabricLabel as string | undefined) ?? null);
   const shownColourId = fabricTouched ? (fabricSel?.colourId ?? null) : ((v.colourId as string | undefined) ?? null);
   const tierOf = (fabricId: string | null): FabricTier | null => {
     if (!fabricId || !category) return null;
@@ -508,6 +509,7 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
         <FabricColourPicker
           productFabrics={fabricRows}
           fabricId={shownFabricId}
+          fabricLabel={shownFabricLabel}
           colourId={shownColourId}
           onChange={(next) => setFabricSel(next)}
           category={category ?? 'SOFA'}

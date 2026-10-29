@@ -2606,6 +2606,7 @@ export const Configurator = () => {
               <FabricColourPicker
                 productFabrics={derivedFabricRows}
                 fabricId={fabricSel?.fabricId ?? null}
+                fabricLabel={fabricSel?.fabricLabel ?? null}
                 colourId={fabricSel?.colourId ?? null}
                 onChange={setFabricSel}
                 category="SOFA"
@@ -2812,6 +2813,7 @@ export const Configurator = () => {
                   <FabricColourPicker
                     productFabrics={bedframeFabricRows}
                     fabricId={fabricSel?.fabricId ?? null}
+                    fabricLabel={fabricSel?.fabricLabel ?? null}
                     colourId={fabricSel?.colourId ?? null}
                     onChange={setFabricSel}
                     category="BEDFRAME"
@@ -3303,6 +3305,7 @@ const SofaAccessoryAddToCart = ({ productId, productName, modelId, priceSen, fab
         <FabricColourPicker
           productFabrics={fabricRows}
           fabricId={fabric?.fabricId ?? null}
+          fabricLabel={fabric?.fabricLabel ?? null}
           colourId={fabric?.colourId ?? null}
           onChange={(sel) => {
             setFabric({ fabricId: sel.fabricId, colourId: sel.colourId, fabricLabel: sel.fabricLabel, colourLabel: sel.colourLabel, colourHex: sel.colourHex });

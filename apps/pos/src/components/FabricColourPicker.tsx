@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { fmtRM, fabricTierAddon, type FabricTier, type FabricTierAddonConfig, type FabricTierModelOverride } from '@2990s/shared';
 import { useFabricLibrary, useFabricColours, type ProductFabricRow } from '../lib/queries';
-import { colourText } from '../lib/fabric-series-groups';
+import { colourText, groupFabricSeries } from '../lib/fabric-series-groups';
+import { useFabricSeriesNames } from '../lib/fabric-series-queries';
 import styles from './FabricColourPicker.module.css';
 
 // Chips show code + colour name, e.g. "CG-015 Mint" (Chairman 2026-06-03).
@@ -26,6 +27,9 @@ export interface FabricColourPickerProps {
   /** From useProductFabrics(productId).data — the Model's per-fabric rows. */
   productFabrics: ProductFabricRow[];
   fabricId: string | null;
+  /** Saved display series disambiguates a colour-KIV selection when one
+   *  canonical fabric is split across several named series. */
+  fabricLabel?: string | null;
   colourId: string | null;
   onChange: (next: FabricSelection) => void;
   /** Pricing context for the fabric-tier add-on (migration 0124). */
@@ -52,9 +56,10 @@ export interface FabricColourPickerProps {
 // "+RM" surcharge (or "Included"); colour swatches belong to the chosen
 // fabric (spec 2026-05-24, G3). Controlled — the Configurator owns the state
 // so the topbar LIVE TOTAL + Add-to-Cart gate can read it.
-export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChange, category = 'SOFA', addonConfig = null, modelOverride = null, enabledColourIds = null, optional = false, onClear }: FabricColourPickerProps) => {
+export const FabricColourPicker = ({ productFabrics, fabricId, fabricLabel, colourId, onChange, category = 'SOFA', addonConfig = null, modelOverride = null, enabledColourIds = null, optional = false, onClear }: FabricColourPickerProps) => {
   const lib = useFabricLibrary();
   const colours = useFabricColours();
+  const savedNames = useFabricSeriesNames();
 
   // Per-Model colour gate (allowed_options.fabrics). null = no restriction.
   const enabledSet = useMemo(
@@ -67,25 +72,47 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
   const fabrics = useMemo(() => {
     const byId = new Map((lib.data ?? []).map((f) => [f.id, f]));
     return productFabrics
-      .filter((pf) => pf.active && byId.has(pf.fabricId))
+      .filter((pf) => pf.active && byId.get(pf.fabricId)?.active)
       .map((pf) => ({ ...byId.get(pf.fabricId)!, surcharge: pf.surcharge }))
       .sort((a, b) => a.sortOrder - b.sortOrder);
   }, [productFabrics, lib.data]);
 
-  // Colours of the chosen series, gated to the Model's enabled set.
-  const coloursForFabric = useMemo(
-    () => (colours.data ?? [])
-      .filter((c) => c.fabricId === fabricId && (!enabledSet || enabledSet.has(c.colourId)))
-      .sort((a, b) => a.sortOrder - b.sortOrder),
-    [colours.data, fabricId, enabledSet],
+  // Use the same saved series as Modular. A display series can merge several
+  // pricing IDs (KN01/KN13 -> EMBRACE), or split one pricing ID by colour.
+  const availableColours = useMemo(() => {
+    const offered = new Set(fabrics.map((f) => f.id));
+    return (colours.data ?? [])
+      .filter((c) => c.active && offered.has(c.fabricId) && (!enabledSet || enabledSet.has(c.colourId)))
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+  }, [colours.data, fabrics, enabledSet]);
+  const grouped = useMemo(
+    () => groupFabricSeries(fabrics, availableColours, savedNames.data ?? []),
+    [fabrics, availableColours, savedNames.data],
   );
+  const series = grouped.series.filter((s) => (grouped.coloursBySeries.get(s.id)?.length ?? 0) > 0);
+  const matchingSeries = series.filter((s) => grouped.coloursBySeries.get(s.id)!.some(
+    (c) => c.fabricId === fabricId && (colourId == null || c.colourId === colourId),
+  ));
+  const selectedSeries = matchingSeries.find((s) => s.label === fabricLabel) ?? matchingSeries[0];
+  const coloursForSeries = (grouped.coloursBySeries.get(selectedSeries?.id ?? '') ?? [])
+    .flatMap((chip) => {
+      const colour = availableColours.find((c) => c.fabricId === chip.fabricId && c.colourId === chip.colourId);
+      return colour ? [colour] : [];
+    });
+  const tierDelta = (fId: string) => {
+    const f = fabrics.find((row) => row.id === fId);
+    const tier = (category === 'BEDFRAME' ? f?.bedframeTier : f?.sofaTier) as FabricTier | null;
+    return addonConfig ? fabricTierAddon(category, tier, addonConfig, modelOverride) : 0;
+  };
+  const deltaLabel = (delta: number) => delta > 0 ? `+${fmtRM(delta)}` : 'Included';
+  const mixedColourPrices = new Set(coloursForSeries.map((c) => tierDelta(c.fabricId))).size > 1;
 
-  const pick = (fId: string, cId: string) => {
+  const pick = (fId: string, cId: string, seriesLabel: string) => {
     const f = fabrics.find((x) => x.id === fId);
-    const c = (colours.data ?? []).find((x) => x.fabricId === fId && x.colourId === cId);
+    const c = availableColours.find((x) => x.fabricId === fId && x.colourId === cId);
     if (!f || !c) return;
     onChange({
-      fabricId: fId, colourId: cId, fabricLabel: f.label, colourLabel: colourText(c),
+      fabricId: fId, colourId: cId, fabricLabel: seriesLabel, colourLabel: colourText(c),
       colourHex: c.swatchHex, surcharge: f.surcharge,
       sofaTier: f.sofaTier ?? null, bedframeTier: f.bedframeTier ?? null,
     });
@@ -95,16 +122,17 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
   // already in the price — but leave the colour to a later My-orders fill-in.
   const pickColourKiv = () => {
     const f = fabrics.find((x) => x.id === fabricId);
-    if (!f) return;
+    if (!f || !selectedSeries) return;
     onChange({
-      fabricId: f.id, colourId: null, fabricLabel: f.label, colourLabel: null,
+      fabricId: f.id, colourId: null, fabricLabel: selectedSeries.label, colourLabel: null,
       colourHex: null, surcharge: f.surcharge,
       sofaTier: f.sofaTier ?? null, bedframeTier: f.bedframeTier ?? null,
     });
   };
 
-  if (lib.isLoading || colours.isLoading) return <p className={styles.muted}>Loading fabrics…</p>;
-  if (fabrics.length === 0) return <p className={styles.muted}>No fabrics enabled for this Model.</p>;
+  if (lib.isLoading || colours.isLoading || savedNames.isLoading) return <p className={styles.muted}>Loading fabrics…</p>;
+  if (savedNames.isError && !savedNames.data) return <p role="alert" className={styles.muted}>Could not load fabric series.</p>;
+  if (series.length === 0) return <p className={styles.muted}>No fabrics enabled for this Model.</p>;
 
   return (
     <>
@@ -114,26 +142,28 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
           {optional && <span className={styles.optionalHint}>Optional — can be confirmed later</span>}
         </header>
         <div className={styles.fabricRow}>
-          {fabrics.map((f) => {
-            const on = f.id === fabricId;
-            const tierForCtx = (category === 'BEDFRAME' ? f.bedframeTier : f.sofaTier) as FabricTier | null;
-            const tierDelta = addonConfig ? fabricTierAddon(category, tierForCtx, addonConfig, modelOverride) : 0;
+          {series.map((s) => {
+            const on = s.id === selectedSeries?.id;
+            const members = grouped.coloursBySeries.get(s.id)!;
+            const deltas = members.map((c) => tierDelta(c.fabricId));
+            const min = Math.min(...deltas);
+            const max = Math.max(...deltas);
+            const priceLabel = on && fabricId ? deltaLabel(tierDelta(fabricId))
+              : min === max ? deltaLabel(min) : `${deltaLabel(min)} – ${deltaLabel(max)}`;
             return (
               <button
-                key={f.id}
+                key={s.id}
                 type="button"
                 aria-pressed={on}
                 className={`${styles.fabricChip} ${on ? styles.fabricChipOn : ''}`}
                 onClick={() => {
                   // Selecting a series snaps colour to its first ENABLED colour.
-                  const first = (colours.data ?? [])
-                    .filter((c) => c.fabricId === f.id && (!enabledSet || enabledSet.has(c.colourId)))
-                    .sort((a, b) => a.sortOrder - b.sortOrder)[0];
-                  if (first) pick(f.id, first.colourId);
+                  const first = members[0];
+                  if (first) pick(first.fabricId, first.colourId, s.label);
                 }}
               >
-                <span className={styles.fabricName}>{f.label}</span>
-                <span className={styles.fabricMeta}>{tierDelta > 0 ? `+${fmtRM(tierDelta)}` : 'Included'}</span>
+                <span className={styles.fabricName}>{s.label}</span>
+                <span className={styles.fabricMeta}>{priceLabel}</span>
               </button>
             );
           })}
@@ -154,12 +184,12 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
       <section className={styles.block}>
         <header className={styles.head}>
           <span className={styles.eyebrow}>Colour</span>
-          {optional && fabricId != null && <span className={styles.optionalHint}>Can be KIV — confirmed later</span>}
+          {optional && selectedSeries && <span className={styles.optionalHint}>Can be KIV — confirmed later</span>}
         </header>
         {/* KIV chip (Loo 2026-06-12) — the customer commits to the fabric
             SERIES (tier add-on charged now) but confirms the colour later.
             The order waits in My orders until the colour is filled in. */}
-        {optional && fabricId != null && (
+        {optional && selectedSeries && (
           <div className={styles.fabricRow} style={{ marginBottom: 10 }}>
             <button
               type="button"
@@ -173,14 +203,14 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
           </div>
         )}
         <div className={styles.colourRow}>
-          {coloursForFabric.map((c) => {
-            const on = c.colourId === colourId;
+          {coloursForSeries.map((c) => {
+            const on = c.fabricId === fabricId && c.colourId === colourId;
             // Swatch + visible name. Fabrics synced from the Fabric Converter
             // have no swatch hex yet, so the name is what the customer reads
             // (Chairman 2026-06-01 "先纯色块 + 名字"). Photos land later.
             return (
               <span
-                key={c.colourId}
+                key={`${c.fabricId}:${c.colourId}`}
                 style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 4, width: 80 }}
               >
                 <button
@@ -190,11 +220,12 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
                   title={colourText(c)}
                   className={`${styles.swatch} ${on ? styles.swatchOn : ''}`}
                   style={{ background: c.swatchHex ?? '#ccc' }}
-                  onClick={() => fabricId && pick(fabricId, c.colourId)}
+                  onClick={() => selectedSeries && pick(c.fabricId, c.colourId, selectedSeries.label)}
                 />
                 <span style={{ fontSize: 'var(--fs-12)', lineHeight: 1.15, textAlign: 'center', color: on ? 'var(--c-ink)' : 'var(--fg-muted)' }}>
                   {colourText(c)}
                 </span>
+                {mixedColourPrices && <span className={styles.fabricMeta}>{deltaLabel(tierDelta(c.fabricId))}</span>}
               </span>
             );
           })}
