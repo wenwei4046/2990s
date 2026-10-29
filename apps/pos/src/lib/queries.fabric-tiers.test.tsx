@@ -63,7 +63,7 @@ describe('useUpdateFabricLibraryTier series updates', () => {
     await act(async () => { late.resolve(ok()); error = await outcome!; });
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('MONZA-HL: permission_denied');
-    expect((error as Error).message).toContain('retry to finish updating the series');
+    expect((error as Error).message).toContain('Check the current tiers before trying again');
     expect(invalidate).toHaveBeenCalledTimes(1);
     expect(qc.getQueryState(['fabric-library'])?.isInvalidated).toBe(true);
     await waitFor(() => expect(result.current.isError).toBe(true));

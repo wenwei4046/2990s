@@ -1748,7 +1748,7 @@ export const useUpdateFabricLibraryTier = () => {
         ? [`${members[i]}: ${String(result.reason instanceof Error ? result.reason.message : result.reason)}`]
         : []);
       if (failures.length) {
-        throw new Error(`Could not update ${failures.join('; ')}. Saved tiers have been reloaded; retry to finish updating the series.`);
+        throw new Error(`Could not update ${failures.join('; ')}. Saved tiers have been reloaded. Check the current tiers before trying again.`);
       }
     },
     // A partial failure must also reload: the table will show Mixed rather
