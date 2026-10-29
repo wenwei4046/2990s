@@ -18,6 +18,8 @@ import {
   useDeleteFreeItemCampaign,
 } from '../../lib/queries';
 import { RuleTargetPicker, finalizeRuleTargets } from './RuleTargetPicker';
+import { useSofaCombos } from '../../lib/products/sofa-combos-queries';
+import { ACCESSORY_COMBO_TARGET_NOTICE, hasUnsupportedComboTargets } from '../../lib/sofa-combo-rule-support';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
@@ -33,13 +35,15 @@ const emptyDraft = (): Draft => ({ name: '', active: false, maxFreeQty: 1, eligi
 
 export function FreeItemCampaignSection({ canEdit }: { canEdit: boolean }) {
   const { data: campaigns = [] } = useFreeItemCampaigns();
+  const { data: combos = [] } = useSofaCombos();
   const create = useCreateFreeItemCampaign();
   const update = useUpdateFreeItemCampaign();
   const remove = useDeleteFreeItemCampaign();
   const [draft, setDraft] = useState<Draft | null>(null);
+  const hasUnsupportedTargets = hasUnsupportedComboTargets(draft?.eligible ?? [], combos);
 
   const onSave = async () => {
-    if (!draft) return;
+    if (!draft || hasUnsupportedTargets) return;
     const clean = {
       name: draft.name.trim(),
       active: draft.active,
@@ -242,6 +246,7 @@ export function FreeItemCampaignSection({ canEdit }: { canEdit: boolean }) {
             value={draft.eligible}
             onChange={(eligible) => setDraft((d) => (d ? { ...d, eligible } : null))}
           />
+          {hasUnsupportedTargets && <p role="alert">{ACCESSORY_COMBO_TARGET_NOTICE}</p>}
 
           <div
             style={{
@@ -257,7 +262,7 @@ export function FreeItemCampaignSection({ canEdit }: { canEdit: boolean }) {
             <Button
               variant="primary"
               onClick={() => void onSave()}
-              disabled={!draft.name.trim()}
+              disabled={!draft.name.trim() || hasUnsupportedTargets}
             >
               Save
             </Button>

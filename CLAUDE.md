@@ -575,6 +575,33 @@ Generate SKUs — and the catalogue spine lists only `pos_active` SKUs.
 
 ## Sofa Accessories — pieces on the Custom build (2026-10-16)
 
+**2026-10-30 — inclusive POS combos and saved Quick Picks.** A Combo may now
+include `accessories: [{ modelId, qty }]` as well as its sofa modules. The fixed
+price covers those pieces, matched only on the sofa modules the combo consumes.
+Covered pieces retain their own cart/SO SKU and fabric but have selling price 0;
+additional pieces keep their live selling price. Never add a covered piece's
+price to the sofa total again. The handover sends parent `sofaAccessories` piece
+identities and child `sofaAccessoryOfKey` / `sofaAccessoryPieceIds`; Houzs verifies
+the actual child SKUs and quantities before it grants inclusion. Client inclusion
+flags are display-only. This needs the coordinated Houzs schema/API/recompute
+release; the old 2990 API deliberately refuses saves containing accessories.
+The new POS opts into accessory-aware lists with `includeAccessories=1`. Houzs
+hides inclusive combos and accessory-bearing Quick Picks from older cached POS
+clients, which would otherwise ignore the pieces and misprice the set.
+
+Global and personal Quick Picks carry `layout: { cells, accessories }` alongside
+legacy modules/depth. Restore stable cell/piece identities, positions and colours;
+use the saved depth when reflowing to a different seat size. Quick Picks store no
+prices. The live engine returns `comboMatchedAccessoryIds`, which the builder and
+Quick Pick both use when creating accessory cart lines.
+
+Until the promotion/delivery trigger APIs carry complete linked pieces, inclusive
+combos are excluded from those trigger selectors and server lookups. A complete
+cart can redeem a PWP reward only when its actual winning combo is eligible.
+Adding accessory sets to an already placed order and independently changing an
+included line's SKU/quantity are blocked; the post-order API has no atomic
+whole-combo edit yet. Colour confirmation keeps an included piece at 0.
+
 Houzs category `FABRIC_ACCESSORY`, shown as "Sofa Accessory" (their #3857). Owner
 2026-10-16: sold from the sofa **Custom build canvas** (hidden from the standalone
 catalogue), as pieces that attach to the modules — back cushion (**no limit**, owner
@@ -585,7 +612,8 @@ on its own instead (2026-10-24, last bullets). Engine + reasons:
 `apps/pos/src/lib/sofa-accessories.ts`.
 
 - 🔑 **Every piece is its OWN cart line and SO line** — its SKU, its exact
-  `sell_price_sen` (never rounded — Houzs re-prices from the same field, 0.5% gate),
+  `sell_price_sen` (or 0 when covered by a verified inclusive combo; never rounded
+  — Houzs re-prices from the same field, 0.5% gate),
   `item_group: fabric_accessory`, fabric keys only. **Never fold one into the sofa's
   `cells` like HEADREST:** Houzs splits a build into `{MODEL}-{cell}` rows, and `AR01` is
   no Model's module. The lines hang off the sofa line (`accessoryOfKey`): qty, removal

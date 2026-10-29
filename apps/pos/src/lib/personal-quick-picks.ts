@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { authedFetch } from './apiClient';
+import { authedFetch, IS_HOUZS } from './apiClient';
+import type { SofaQuickPickLayout } from './sofa-quick-pick-layout';
 
 /**
  * Personal Quick Picks — a salesperson's OWN saved sofa layouts, now DB-backed
@@ -16,6 +17,7 @@ export interface PersonalQuickPickRow {
   baseModel: string;
   label: string | null;
   modules: string[][];
+  layout?: SofaQuickPickLayout | null;
   depth: string;
   sortOrder: number;
   createdAt: string;
@@ -40,6 +42,7 @@ export const useMyQuickPicks = (userId?: string | null, baseModel?: string | nul
     queryFn: async (): Promise<PersonalQuickPickRow[]> => {
       const params = new URLSearchParams();
       if (baseModel) params.set('baseModel', baseModel);
+      params.set('includeAccessories', '1');
       const body = await authedFetch<PicksResponse>(`/personal-quick-picks?${params.toString()}`);
       return body.picks;
     },
@@ -50,6 +53,7 @@ interface AddQuickPickInput {
   baseModel: string;
   /** Flat module ids OR OR-set slots — the API canonicalises to string[][]. */
   modules: string[] | string[][];
+  layout?: SofaQuickPickLayout;
   depth: string;
   label?: string | null;
 }
@@ -57,8 +61,12 @@ interface AddQuickPickInput {
 export const useAddPersonalQuickPick = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: AddQuickPickInput) =>
-      authedFetch('/personal-quick-picks', { method: 'POST', body: JSON.stringify(input) }),
+    mutationFn: async (input: AddQuickPickInput) => {
+      if (!IS_HOUZS && input.layout?.accessories.length) {
+        throw new Error('This backend cannot save Quick Picks with sofa accessories. Switch to Houzs before saving this layout.');
+      }
+      return authedFetch('/personal-quick-picks', { method: 'POST', body: JSON.stringify(input) });
+    },
     onSuccess: () => {
       // Prefix match refreshes the caller's bucket regardless of userId/baseModel.
       void qc.invalidateQueries({ queryKey: ['personal-quick-picks'] });

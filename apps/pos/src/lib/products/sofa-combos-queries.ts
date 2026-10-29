@@ -19,6 +19,7 @@ export type SofaComboRule = {
   baseModel: string;
   /** OR-set per slot: ordered slots, each an array of alternative codes. */
   modules: string[][];
+  accessories?: { modelId: string; qty: number }[];
   tier: SofaPriceTier | null;
   customerId: string | null;
   /** COST per height (backend / PO benchmark). NOT shown or edited on this page. */
@@ -44,6 +45,7 @@ export type NewSofaCombo = {
   baseModel: string;
   /** OR-set per slot: ordered slots, each an array of alternative codes. */
   modules: string[][];
+  accessories?: { modelId: string; qty: number }[];
   tier: SofaPriceTier | null;
   customerId: string | null;
   /** SELLING price per height. The page sends this; the server auto-detects COST
@@ -72,6 +74,8 @@ export function useSofaCombos(filters: ComboFilters = {}) {
       if (filters.baseModel) params.set('baseModel', filters.baseModel);
       if (filters.customerId === null) params.set('customerId', '__all__');
       else if (filters.customerId) params.set('customerId', filters.customerId);
+      // Cached older POS builds cannot interpret accessory requirements.
+      params.set('includeAccessories', '1');
       const qs = params.toString();
       return authedFetch<{ rules: SofaComboRule[] }>(
         `${COMBOS_PATH}${qs ? `?${qs}` : ''}`,
@@ -84,6 +88,7 @@ export function useSofaCombos(filters: ComboFilters = {}) {
 export function useSofaComboHistory(args: {
   baseModel: string;
   modules: string[][];
+  accessories?: { modelId: string; qty: number }[];
   tier: SofaPriceTier | null;
   customerId: string | null;
 } | null) {
@@ -96,6 +101,7 @@ export function useSofaComboHistory(args: {
       params.set('baseModel', args.baseModel);
       // OR-set slots are JSON-encoded; the API matches by canonical slot key.
       params.set('modules', JSON.stringify(args.modules));
+      if (args.accessories?.length) params.set('accessories', JSON.stringify(args.accessories));
       if (args.tier) params.set('tier', args.tier);
       if (args.customerId) params.set('customerId', args.customerId);
       return authedFetch<{ rules: SofaComboRule[] }>(

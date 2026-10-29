@@ -699,6 +699,9 @@ export interface AccessoryLine {
   /** Pieces on ONE sofa; the cart multiplies by the sofa line's qty. */
   qtyPerSofa: number;
   fabric: AccessoryFabric | null;
+  /** Stable canvas pieces, verified against the parent build by the server. */
+  pieceIds?: string[];
+  includedInCombo?: boolean;
 }
 
 const fabricKey = (f: AccessoryFabric | null): string => (f ? `${f.fabricId}|${f.colourId ?? ''}` : '');
@@ -710,18 +713,35 @@ export function accessoryLines(
   placed: readonly PlacedAccessory[],
   options: ReadonlyMap<string, SofaAccessoryOption>,
   sofaFabric: AccessoryFabric | null,
+  includedIds: ReadonlySet<string> = new Set(),
 ): AccessoryLine[] {
   const lines = new Map<string, AccessoryLine>();
   for (const p of placed) {
     const o = options.get(p.modelId);
     if (!o || !isPriced(o)) continue;
     const fabric = p.fabric ?? sofaFabric ?? null;
-    const k = `${o.modelId}#${fabricKey(fabric)}`;
+    const included = includedIds.has(p.id);
+    const k = `${o.modelId}#${fabricKey(fabric)}#${included}`;
     const cur = lines.get(k);
-    if (cur) cur.qtyPerSofa += 1;
-    else lines.set(k, { modelId: o.modelId, productId: o.productId, code: o.code, name: o.name, unitPriceSen: o.priceSen as number, qtyPerSofa: 1, fabric });
+    if (cur) { cur.qtyPerSofa += 1; cur.pieceIds!.push(p.id); }
+    else lines.set(k, { modelId: o.modelId, productId: o.productId, code: o.code, name: o.name, unitPriceSen: included ? 0 : o.priceSen as number, qtyPerSofa: 1, fabric, pieceIds: [p.id], includedInCombo: included });
   }
   return [...lines.values()];
+}
+
+/** Requirements saved with a combo, independent of placement and fabric. */
+export function comboAccessories(placed: readonly PlacedAccessory[]): { modelId: string; qty: number }[] {
+  const quantities = new Map<string, number>();
+  for (const p of placed) quantities.set(p.modelId, (quantities.get(p.modelId) ?? 0) + 1);
+  return [...quantities].sort(([a], [b]) => a.localeCompare(b)).map(([modelId, qty]) => ({ modelId, qty }));
+}
+
+/** Live catalogue prices only; saved layouts never carry a reusable price. */
+export function pricedAccessories(placed: readonly PlacedAccessory[], options: ReadonlyMap<string, SofaAccessoryOption>) {
+  return placed.flatMap((p) => {
+    const o = options.get(p.modelId);
+    return o && isPriced(o) ? [{ id: p.id, modelId: p.modelId, cellId: p.cellId, priceSen: o.priceSen as number }] : [];
+  });
 }
 
 /** Pieces whose accessory has no selling price — Add must wait for one. */

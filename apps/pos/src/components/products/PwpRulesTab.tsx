@@ -39,6 +39,7 @@ import {
 } from '../../lib/queries';
 import { FreeItemCampaignSection } from './FreeItemCampaignSection';
 import { RuleTargetRefinement, finalizeRefinement } from './RuleTargetPicker';
+import { ACCESSORY_COMBO_TARGET_NOTICE, hasUnsupportedComboTargets, supportsModuleOnlyComboTarget } from '../../lib/sofa-combo-rule-support';
 
 type Mode = 'view' | 'add-only' | 'full';
 // SOFA is matched by Combo (Phase 2); Mattress/Bedframe by Model.
@@ -204,6 +205,10 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
   const save = async () => {
     if (!editModelId) return;
     setError(null);
+    if (hasUnsupportedComboTargets(draft.map((gift) => gift.condition), combosQ.data ?? [])) {
+      setError(ACCESSORY_COMBO_TARGET_NOTICE);
+      return;
+    }
     const gifts = cleanGifts(draft);
     try {
       if (gifts.length === 0) await remove.mutateAsync(editModelId);
@@ -513,10 +518,10 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
 
   // Selectable items for a category: {id,label}. SOFA → combos, or sofa Models
   // when the trigger is in 'model' mode; mattress/bedframe → models.
-  const itemsFor = (cat: Cat, sofaMode: SofaMode = 'combo'): { id: string; label: string }[] => {
+  const itemsFor = (cat: Cat, sofaMode: SofaMode = 'combo', trigger = false): { id: string; label: string }[] => {
     if (cat === 'SOFA') {
       if (sofaMode === 'model') return (sofaQ.data ?? []).map((m) => ({ id: m.id, label: modelLabel(m) }));
-      return (combosQ.data ?? []).map((c) => ({ id: c.id, label: comboLabel(c) }));
+      return (combosQ.data ?? []).filter((c) => !trigger || supportsModuleOnlyComboTarget(c)).map((c) => ({ id: c.id, label: comboLabel(c) }));
     }
     const rows = (cat === 'MATTRESS' ? mattressQ.data : bedframeQ.data) ?? [];
     return rows.map((m) => ({ id: m.id, label: modelLabel(m) }));
@@ -625,6 +630,10 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
     // SOFA reward: always combos. Mattress/bedframe: model ids.
     const trigByModel = draft.triggerCategory === 'SOFA' && draft.triggerSofaMode === 'model';
     const trigByCombo = draft.triggerCategory === 'SOFA' && draft.triggerSofaMode === 'combo';
+    if (trigByCombo && hasUnsupportedComboTargets([{ scope: 'combo', comboIds: draft.triggerModelIds }], combosQ.data ?? [])) {
+      setError(ACCESSORY_COMBO_TARGET_NOTICE);
+      return;
+    }
     const body = {
       triggerCategory: draft.triggerCategory,
       triggerEligibleModelIds: draft.triggerCategory !== 'SOFA' || trigByModel ? draft.triggerModelIds : [],
@@ -667,20 +676,32 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
 
   // ── Editor (create / edit one rule) ───────────────────────────────────────
   if (draft) {
-    const ChipRow = ({ cat, sofaMode = 'combo', selected, onToggle }: { cat: Cat; sofaMode?: SofaMode; selected: string[]; onToggle: (id: string) => void }) => {
-      const items = itemsFor(cat, sofaMode);
+    const ChipRow = ({ cat, sofaMode = 'combo', trigger = false, selected, onToggle }: { cat: Cat; sofaMode?: SofaMode; trigger?: boolean; selected: string[]; onToggle: (id: string) => void }) => {
+      const items = itemsFor(cat, sofaMode, trigger);
+      const unavailable = trigger && cat === 'SOFA' && sofaMode === 'combo'
+        ? (combosQ.data ?? []).filter((combo) => !supportsModuleOnlyComboTarget(combo)) : [];
       const noun = cat === 'SOFA' ? (sofaMode === 'model' ? 'sofa models' : 'combos') : 'models';
       if (loadingFor(cat, sofaMode)) return <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>Loading {noun}…</div>;
-      if (items.length === 0) return <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>No {catLabel(cat)} {noun} yet.</div>;
       return (
         <>
+          {items.length === 0 && <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>No eligible {catLabel(cat)} {noun} yet.</div>}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
             {items.map((it) => (
               <button key={it.id} type="button" disabled={!canEdit} onClick={() => onToggle(it.id)} style={chipStyle(selected.includes(it.id), !canEdit)}>
                 {it.label}
               </button>
             ))}
+            {unavailable.filter((combo) => selected.includes(combo.id)).map((combo) => (
+              <button key={combo.id} type="button" disabled={!canEdit} onClick={() => onToggle(combo.id)} style={chipStyle(true, !canEdit)}>
+                Remove {comboLabel(combo)} (unavailable)
+              </button>
+            ))}
           </div>
+          {unavailable.length > 0 && (
+            <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-2)' }}>
+              {ACCESSORY_COMBO_TARGET_NOTICE}
+            </div>
+          )}
           {selected.length === 0 && (
             <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-2)' }}>
               {cat === 'SOFA'
@@ -739,7 +760,7 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
               ))}
             </div>
           )}
-          <ChipRow cat={draft.triggerCategory} sofaMode={draft.triggerSofaMode} selected={draft.triggerModelIds} onToggle={(id) => setDraft({ ...draft, triggerModelIds: draft.triggerModelIds.includes(id) ? draft.triggerModelIds.filter((x) => x !== id) : [...draft.triggerModelIds, id] })} />
+          <ChipRow trigger cat={draft.triggerCategory} sofaMode={draft.triggerSofaMode} selected={draft.triggerModelIds} onToggle={(id) => setDraft({ ...draft, triggerModelIds: draft.triggerModelIds.includes(id) ? draft.triggerModelIds.filter((x) => x !== id) : [...draft.triggerModelIds, id] })} />
           {(draft.triggerCategory === 'MATTRESS' || draft.triggerCategory === 'BEDFRAME') && (
             <RefineChips options={PICKABLE_SIZES} labels={SIZE_LABELS} selected={draft.triggerSizeCodes}
               onToggle={(v) => setDraft({ ...draft, triggerSizeCodes: toggleRefine(draft.triggerSizeCodes, v) })}

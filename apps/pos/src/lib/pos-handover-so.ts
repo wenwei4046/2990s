@@ -550,6 +550,7 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     const v: Record<string, unknown> = {};
     if (config.bundleId)        v.bundleId = config.bundleId;
     if (config.cells)           v.cells = config.cells;
+    if (config.accessories?.length) v.sofaAccessories = config.accessories.map(({ id, modelId, cellId }) => ({ id, modelId, cellId }));
     if (config.depth)           v.depth = config.depth;
     if (config.seatUpgradeLabel != null)    v.seatUpgradeLabel = config.seatUpgradeLabel;
     if (config.seatUpgradeFootrest != null) v.seatUpgradeFootrest = config.seatUpgradeFootrest;
@@ -672,13 +673,18 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
   // (fabricCode / colourId, or the series via fabricId). ONLY fabric keys — the
   // leg / specials / seat pools are checked for every category, so a sofa's
   // depth or leg copied here would be refused or print on the line.
-  if (config.category === 'FABRIC_ACCESSORY' && config.fabricId) {
-    const v: Record<string, unknown> = { fabricId: config.fabricId };
+  if (config.category === 'FABRIC_ACCESSORY') {
+    const v: Record<string, unknown> = {};
+    if (config.fabricId) v.fabricId = config.fabricId;
+    if (config.accessoryOfKey && config.accessoryPieceIds?.length) {
+      v.sofaAccessoryOfKey = config.accessoryOfKey;
+      v.sofaAccessoryPieceIds = config.accessoryPieceIds;
+    }
     if (config.fabricLabel) v.fabricLabel = config.fabricLabel;
     if (config.colourId) { v.colourId = config.colourId; v.fabricCode = config.colourId; }
     if (config.colourLabel) v.colourLabel = config.colourLabel;
     if (config.colourHex) v.colourHex = config.colourHex;
-    return v;
+    return Object.keys(v).length ? v : null;
   }
   // flat — nothing to capture beyond the product itself.
   return null;

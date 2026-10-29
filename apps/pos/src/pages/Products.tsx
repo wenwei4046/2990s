@@ -131,6 +131,7 @@ import { SofaComboTab } from '../components/products/SofaComboTab';
 import { PwpRulesTab } from '../components/products/PwpRulesTab';
 import { CampaignPromosTab } from '../components/products/CampaignPromosTab';
 import { RuleTargetPicker, finalizeRuleTargets } from '../components/products/RuleTargetPicker';
+import { ACCESSORY_COMBO_TARGET_NOTICE, hasUnsupportedComboTargets } from '../lib/sofa-combo-rule-support';
 import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
 import { compareProductCategories, isSingleSkuCategory, productCategoryChips, productCategoryLabel } from '../lib/products/product-categories';
@@ -665,6 +666,9 @@ const SpecialDeliveryFeesSection = ({ canEdit }: { canEdit: boolean }) => {
     if (!draft) return;
     setErr(null);
     const target = finalizeRuleTargets(draft.target);
+    if (hasUnsupportedComboTargets(target, combos.data ?? [])) {
+      setErr(ACCESSORY_COMBO_TARGET_NOTICE); return;
+    }
     if (target.length === 0) { setErr('Pick at least one Model.'); return; }
     if (typeof draft.standaloneFee !== 'number' || typeof draft.crossCatFollowupFee !== 'number') {
       setErr('Enter both fees as whole-RM numbers.'); return;

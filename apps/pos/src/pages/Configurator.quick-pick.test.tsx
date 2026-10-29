@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { BUNDLES } from '@2990s/shared';
+import type { SofaAccessoryOption } from '../lib/sofa-accessories';
 
 // The view needs no backend; prevent API clients from initializing real sessions.
 vi.mock('../lib/supabase', () => ({ supabase: {} }));
@@ -56,5 +57,28 @@ describe('Quick Pick card actions', () => {
     expect(select).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Select ' + bundle.label }));
     expect(select).toHaveBeenCalledExactlyOnceWith(bundle.id);
+  });
+
+  it('shows saved accessories on the card and hero and passes the full layout into live pricing', () => {
+    const layout = {
+      cells: [{ id: 'saved-sofa', moduleId: '2NA', x: 0, y: 0, rot: 0 as const }],
+      accessories: [{ id: 'saved-cushion', modelId: 'cushion', cellId: 'saved-sofa', slot: 0 }],
+    };
+    const item = { id: 'with-pieces', source: 'global' as const, label: 'With cushion', modules: [['2NA']], layout, depth: '24' };
+    const price = vi.fn(() => 1125.75);
+    const accessoryOptions = new Map<string, SofaAccessoryOption>([
+      ['cushion', { modelId: 'cushion', productId: 'bc', code: 'BC06', name: 'Back cushion', role: 'back', priceSen: 25000, armWidthCm: 0 }],
+    ]);
+    const { container } = render(
+      <SofaQuickPick isLoading={false} rows={[]} picked={null} onPick={vi.fn()}
+        quickFlip="R" onFlipChange={vi.fn()} depth="24" maxDepth="24"
+        globalQuickPicks={[item]} pickedQuickPickId={item.id} priceForLayout={price}
+        accessoryOptions={accessoryOptions} />,
+    );
+    expect(price).toHaveBeenCalledWith(item.modules, layout, '24');
+    expect(screen.getByText('RM1,125.75')).toBeInTheDocument();
+    expect(container.querySelectorAll('[data-accessory-id="saved-cushion"]')).toHaveLength(2);
+    // The sofa itself is symmetric, but an accessory on one side can be mirrored.
+    expect(screen.getByRole('button', { name: 'Mirror left to right' })).toBeInTheDocument();
   });
 });
