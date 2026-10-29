@@ -181,6 +181,29 @@ price. Save through the POS combo endpoint and refresh combo pricing. Ordinary
 sales staff retain their existing Quick Pick action. Price actions may wrap on
 tablets to accommodate the additional button.
 
+### Android sofa tablet text overflow · 30 October 2026
+
+Owner requested overlap fixes for the HONOR Pad X8b simulator while retaining
+the Apple presentation. Android sofa pages keep compact header spacing through
+1366 CSS pixels, reserve space for the depth/mode controls, and give actions a
+second row at 768–1100px. Custom-build price actions may wrap within their panel.
+Customize allows vertical touch scrolling from empty canvas space while sofa
+modules and accessories retain their drag gestures; its options panel scrolls independently.
+In Android tablet landscape, Customize places its existing total and actions above
+the canvas and keeps them below the sticky header while scrolling, so the price
+is visible immediately. Portrait keeps the existing placement.
+Follow-up from the owner: landscape now moves that same total/action group into
+the top toolbar and fits the full room, including the TV, into the remaining
+screen height. The page does not scroll vertically; only the options rail does.
+This replaces the landscape sticky-price placement above; portrait stays unchanged.
+The owner also requested visual cleanup: the landscape total has a compact
+bordered summary, secondary actions have matching outlines and 44px targets,
+and the canvas title/tools align on a divided row. Below 1280px, Customize's
+navigation and selling actions use separate rows rather than crowding one row.
+Apple, phone, and non-sofa layouts retain their existing rules. The local
+simulation can explicitly select the Android layout for review; this does not
+emulate Android itself or establish the physical tablet's browser scaling.
+
 ### SKU Master model filter names · 30 October 2026
 
 Owner requested the POS SKU Master model filter rail to follow the Model name.
