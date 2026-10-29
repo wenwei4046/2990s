@@ -29,6 +29,7 @@ import { useMarketingState } from '../lib/marketing-api';
 import { authedFetchRaw, IS_HOUZS } from '../lib/apiClient';
 import { useCart, cartHasSofa, cartHasMainNonSofa, type FlatConfigSnapshot } from '../state/cart';
 import { fmtAccessoryPrice } from '../lib/sofa-accessories';
+import { preloadConfiguratorRoute } from '../lib/configurator-route';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
 import { useMediaQuery } from '../hooks/useMediaQuery';
@@ -820,7 +821,13 @@ const ProductCard = ({ p, blocked = false, addToOrder }: { p: CatalogCard; block
   }
 
   return (
-    <Link to={configuratorUrl} className={styles.card}>
+    <Link
+      to={configuratorUrl}
+      className={styles.card}
+      onMouseEnter={preloadConfiguratorRoute}
+      onFocus={preloadConfiguratorRoute}
+      onPointerDown={preloadConfiguratorRoute}
+    >
       {inner}
     </Link>
   );
