@@ -9,6 +9,7 @@ import type { Cell, SofaProductPricing } from '@2990s/shared';
 vi.mock('../lib/supabase', () => ({ supabase: {} }));
 // Only Quick Pick / Combo curation reads the signed-in staff; no session here.
 vi.mock('../lib/staff', () => ({ useStaff: () => ({ data: null }), isGlobalCurator: () => false }));
+vi.mock('../lib/houzs-perms', () => ({ useMaintainAccess: () => ({ canMaintain: false, isLoading: false }) }));
 import { CustomBuilder } from './CustomBuilder';
 
 beforeAll(() => {

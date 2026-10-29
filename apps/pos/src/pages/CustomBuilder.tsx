@@ -36,9 +36,11 @@ import {
 import { buildSeamlessRun, renderSeamlessSofa, renderSeamlessGroup, isFunctionalSeat, SOFA_BAND, SOFA_INK, type SeamlessRun } from '../lib/sofa-seamless';
 import { canonicalConversion, canonicalMatchesCells } from '../lib/sofa-canonical';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
-import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useModelFabricTierOverrides, useCompartmentFabricTierOverrides, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow, type SpecialAddonRow } from '../lib/queries';
+import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useModelFabricTierOverrides, useCompartmentFabricTierOverrides, useCreateSofaCombo, useCreateSofaQuickPick, type SofaCustomizerData, type ProductFabricRow, type SpecialAddonRow } from '../lib/queries';
 import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
+import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
+import { useMaintainAccess } from '../lib/houzs-perms';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import { SpecialAddonsPicker, sofaBuildCompartments, specialSelsSurchargeFor, type SpecialSel } from '../components/SpecialAddonsPicker';
@@ -1170,11 +1172,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
      persist the current cell composition as a new Sofa Combo Pricing row
      so it appears in the Quick Pick row next time. */
   const [saveComboOpen, setSaveComboOpen] = useState(false);
-  // Master-Admin "Create Combo" surface (Phase 5) — sets the SELLING price for
-  // the current build; the server auto-detects COST from the module SKUs.
+  // Combo selling prices use the same resolved permission as Products.
   const [createComboOpen, setCreateComboOpen] = useState(false);
   const { data: staff } = useStaff();
   const canCurate = isGlobalCurator(staff?.role);
+  const { canMaintain } = useMaintainAccess();
+  // Combos match within one sofa; disconnected sofas cannot share one rule.
+  const canCreateCombo = canMaintain && !layoutOnly && sellingDataReady
+    && modelCustomizerState === 'ready' && cells.length > 0
+    && allClosed && priceResult.groups.length === 1 && (baseModel ?? '').trim() !== '';
   // Restore the parent's selection after a mode switch or cart-line hydration.
   // Guarded so manual changes aren't clobbered while the builder is mounted.
   const fabricHydratedRef = useRef(false);
@@ -2322,8 +2328,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           {cells.length > 0 && allClosed && !layoutOnly && (
             <div className={styles.mobileToolRow}>
               <Button variant="ghost" onClick={() => setSaveComboOpen(true)}>Save as Quick Pick</Button>
-              {canCurate && (baseModel ?? '').trim() !== '' && (
-                <Button variant="ghost" onClick={() => setCreateComboOpen(true)}>Create Combo</Button>
+              {canCreateCombo && (
+                <Button variant="ghost" onClick={() => setCreateComboOpen(true)}>Add to Combo Price</Button>
               )}
             </div>
           )}
@@ -2378,18 +2384,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 Save as Quick Pick
               </Button>
             )}
-            {/* Master Admin only — turn the current build into a priced Combo
-                (set SELLING; server auto-detects COST). A Combo is the invisible
-                selling-price logic; it auto-applies on future module matches.
-                Needs a base_model (the combo is scoped to one Model + the server
-                rejects an empty one), so hide it on legacy/orphan SKUs. */}
-            {cells.length > 0 && allClosed && canCurate && (baseModel ?? '').trim() !== '' && (
+            {/* Authorized price editors can save this sofa's module set as a
+                selling-price rule that applies to future matching builds. */}
+            {canCreateCombo && (
               <Button
                 className={styles.desktopSaveAction}
                 variant="ghost"
                 onClick={() => setCreateComboOpen(true)}
               >
-                Create Combo
+                Add to Combo Price
               </Button>
             )}
             <Button variant="primary" disabled={!canAdd || swapPending || addToOrderPending || (onAddToOrderConfirm && !addEligible)} onClick={handleAdd}>
@@ -2421,14 +2424,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             onSaved={() => setSaveComboOpen(false)}
           />
         )}
-        {createComboOpen && (
+        {createComboOpen && canCreateCombo && (
           <CreateComboModal
             modules={orderSofaCellsLeftToRight(cells, depth).map((c) => c.moduleId)}
             depth={depth}
             /* SEN, not the ringgit view — the dialog divides by 100 to seed its
                price field. It was fed the whole-ringgit total before this port,
                so a build showing RM 3,800 seeded the new combo at RM 38. */
-            currentPriceCenti={priceResultSen.total}
+            currentPriceCenti={priceResultSen.total - priceResultSen.groups.reduce((sum, group) => sum + group.reclinerExtra, 0)}
             baseModel={baseModel ?? ''}
             onClose={() => setCreateComboOpen(false)}
             onSaved={() => setCreateComboOpen(false)}
@@ -2609,22 +2612,14 @@ function SaveQuickPickModal({
   );
 }
 
-/* ─── CreateComboModal ───────────────────────────────────────────────────
-   Master Admin only (Phase 5). Turns the current build into a priced Combo —
-   the INVISIBLE selling-price logic that auto-applies whenever a future build
-   matches this module-set. The Master Admin keys the SELLING price for EACH
-   seat height (same grid as the Backend Combo Pricing "New Combo" panel, minus
-   the module picker — modules are already fixed by the build). A blank size = no
-   combo there → that size falls back to the base price. The server auto-detects
-   the COST = Σ the constituent module SKUs' costs (Backend-overridable later).
-   Stored in sofa_combo_pricing, so it also appears on the Backend for cost
-   review. */
+/* Save the current sofa as a POS selling-price rule. Its module set is fixed
+   by the canvas; blank sizes continue to use their normal module prices. */
 function CreateComboModal({
   modules, depth, currentPriceCenti, baseModel, onClose, onSaved,
 }: {
   modules: string[];
   depth: string;
-  /** Live à-la-carte total (centi) — a sensible default for the selling price. */
+  /** Base sofa price in sen, excluding upgrades charged separately. */
   currentPriceCenti: number;
   baseModel: string;
   onClose: () => void;
@@ -2633,29 +2628,37 @@ function CreateComboModal({
   const create = useCreateSofaCombo();
   // Active combos for this Model — used to block adding a duplicate (same
   // module-set) on this create path (Chairman 2026-06-02).
-  const existingCombosQ = useSofaCombos(baseModel);
+  const existingCombosQ = useSofaCombos({ baseModel, customerId: null });
   // Seat-height columns mirror the live Maintenance pool (Products → Maintenance
   // → Sofa → Sizes; key `sofaSizes`) — the SAME source the Backend Combo Pricing
   // "New Combo" panel uses, so this dialog offers every size that panel does.
   const heightsCfg = useMaintenanceConfig('master');
   // ACTIVE sizes only (owner spec 2026-06-12) — this dialog creates NEW
   // combos, so deactivated seat sizes must not be offered.
-  const heights = heightsCfg.data?.data?.sofaSizes
+  const configuredHeights = heightsCfg.data?.data?.sofaSizes
     ? maintActiveValues(heightsCfg.data.data.sofaSizes)
     : COMBO_HEIGHTS_FALLBACK;
+  // The selected canvas size must have an input even while the pool is loading
+  // (for example 37", which is newer than the legacy fallback).
+  const heights = [...new Set([...configuredHeights, String(depth)])];
   // Seed the current seat depth with the live à-la-carte total (the price the
   // Master Admin is looking at); every other size starts blank — a blank size
   // means "no combo here" → that size uses the base price.
   const [prices, setPrices] = useState<Record<string, string>>(() => ({
-    [String(depth)]: String(Math.round(currentPriceCenti / 100)),
+    [String(depth)]: String(currentPriceCenti / 100),
   }));
+  const [error, setError] = useState<string | null>(null);
+  const canSubmit = existingCombosQ.data !== undefined && !existingCombosQ.isFetching
+    && !existingCombosQ.isError && !create.isPending;
 
   const submit = async () => {
+    if (!canSubmit) return;
+    setError(null);
     // Block duplicates: re-adding the same module-set silently makes a new
     // version (append-only table). Warn + stop, and steer to editing instead.
     const dup = findDuplicateCombo(baseModel, modules.map((m) => [m]), existingCombosQ.data ?? []);
     if (dup) {
-      alert(`This combo already exists for ${baseModel}. Edit it in Backend → Combo Pricing instead of adding a duplicate.`);
+      setError(`This combo already exists for ${baseModel}. Edit it in Products → Combo Price.`);
       return;
     }
     const sellingPricesByHeight: Record<string, number | null> = {};
@@ -2664,11 +2667,15 @@ function CreateComboModal({
       const raw = (prices[h] ?? '').trim();
       if (!raw) { sellingPricesByHeight[h] = null; continue; }
       const n = Number(raw);
-      if (!Number.isFinite(n) || n < 0) { alert(`Bad price at ${h}".`); return; }
-      sellingPricesByHeight[h] = Math.round(n * 100);
+      const sen = Math.round(n * 100);
+      if (!Number.isFinite(n) || n < 0 || !Number.isSafeInteger(sen) || Math.abs(n * 100 - sen) > 0.000001) {
+        setError(`Enter a valid price with up to two decimal places at ${h}".`);
+        return;
+      }
+      sellingPricesByHeight[h] = sen;
       any = true;
     }
-    if (!any) { alert('Enter a price for at least one seat height.'); return; }
+    if (!any) { setError('Enter a price for at least one seat height.'); return; }
     const today = new Date().toISOString().slice(0, 10);
     try {
       await create.mutateAsync({
@@ -2685,7 +2692,7 @@ function CreateComboModal({
       });
       onSaved();
     } catch (e) {
-      alert(`Create failed: ${String(e)}`);
+      setError(`Create failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -2694,26 +2701,26 @@ function CreateComboModal({
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
       padding: '8vh 16px', zIndex: 1000,
-    }} onClick={onClose}>
-      <div className={styles.dialogPanel} role="dialog" aria-modal="true" aria-label="Create Combo" onClick={(e) => e.stopPropagation()} style={{
+    }} onClick={() => { if (!create.isPending) onClose(); }}>
+      <div className={styles.dialogPanel} role="dialog" aria-modal="true" aria-label="Add to Combo Price" onClick={(e) => e.stopPropagation()} style={{
         background: 'var(--c-paper)', borderRadius: 'var(--radius-md)',
         padding: 24, width: '100%', maxWidth: 600,
         display: 'flex', flexDirection: 'column', gap: 16,
       }}>
         <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 'var(--fs-18)' }}>
-          Create Combo
+          Add to Combo Price
         </h3>
         <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
           Sets a fixed selling price for this {modules.length}-compartment set at each
           seat height. It applies automatically whenever a build matches these modules.
-          Leave a size blank to fall back to the base price there. Cost is filled
-          automatically from the module prices — adjust it on the Backend if needed.
+          Leave a size blank to use its normal module prices. Fabric, legs and
+          other add-ons are charged separately.
         </p>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
             Prices by seat height (RM)
           </span>
-          <div className={styles.comboPrices} style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
+          <div className={styles.comboPrices} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(76px, 1fr))', gap: 8 }}>
             {heights.map((h) => (
               <div key={h}>
                 <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>
@@ -2721,8 +2728,11 @@ function CreateComboModal({
                 </div>
                 <input
                   type="number"
-                  step="1"
+                  step="0.01"
                   min="0"
+                  inputMode="decimal"
+                  aria-label={`Selling price at ${h} inches`}
+                  disabled={create.isPending}
                   value={prices[h] ?? ''}
                   onChange={(e) => setPrices((cur) => ({ ...cur, [h]: e.target.value }))}
                   placeholder="—"
@@ -2731,14 +2741,21 @@ function CreateComboModal({
               </div>
             ))}
           </div>
-        </label>
-        <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-          Modules: {modules.join(' · ')}
         </div>
+        <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          {baseModel} · Modules: {modules.join(' · ')}
+        </div>
+        {existingCombosQ.isError ? (
+          <div role="alert">
+            Could not check existing combos. Retry before creating a combo.
+            <Button variant="ghost" disabled={existingCombosQ.isFetching} onClick={() => { void existingCombosQ.refetch(); }}>Retry</Button>
+          </div>
+        ) : existingCombosQ.isFetching ? <div role="status">Checking existing combos…</div> : null}
+        {error && <div role="alert">{error}</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" onClick={() => { void submit(); }} disabled={create.isPending}>
-            {create.isPending ? 'Creating…' : 'Create Combo'}
+          <Button variant="ghost" onClick={onClose} disabled={create.isPending}>Cancel</Button>
+          <Button variant="primary" onClick={() => { void submit(); }} disabled={!canSubmit}>
+            {create.isPending ? 'Creating…' : 'Create combo'}
           </Button>
         </div>
       </div>

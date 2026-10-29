@@ -8,6 +8,7 @@ import type { SpecialSel } from '../components/SpecialAddonsPicker';
 
 vi.mock('../lib/supabase', () => ({ supabase: {} }));
 vi.mock('../lib/staff', () => ({ useStaff: () => ({ data: null }), isGlobalCurator: () => false }));
+vi.mock('../lib/houzs-perms', () => ({ useMaintainAccess: () => ({ canMaintain: false, isLoading: false }) }));
 import { CustomBuilder } from './CustomBuilder';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
 import { cellsFromComboModules } from '../lib/sofa-combo-cells';
