@@ -59,11 +59,12 @@ describe('phone sales menu', () => {
   });
 });
 
-describe('Android sofa layout scope', () => {
+describe('Android product layout scope', () => {
   it.each([
-    ['Apple sofa', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 Safari/605.1.15', true],
-    ['Android non-sofa', 'Mozilla/5.0 (Linux; Android 14) Chrome/130.0.0.0', false],
-  ] as const)('does not alter %s headers', (_name, userAgent, sofaConfigurator) => {
+    ['Apple sofa', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 Safari/605.1.15', { sofaConfigurator: true }],
+    ['Apple mattress/bedframe', 'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Safari/605.1.15', { productConfigurator: true }],
+    ['Android non-product', 'Mozilla/5.0 (Linux; Android 14) Chrome/130.0.0.0', {}],
+  ] as const)('does not alter %s headers', (_name, userAgent, props) => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(userAgent);
     const observe = vi.fn();
     vi.stubGlobal('ResizeObserver', class {
@@ -71,15 +72,19 @@ describe('Android sofa layout scope', () => {
       disconnect = vi.fn();
     });
 
-    render(<MemoryRouter><Topbar sofaConfigurator={sofaConfigurator} /></MemoryRouter>);
+    render(<MemoryRouter><Topbar {...props} /></MemoryRouter>);
 
+    expect(screen.getByRole('banner')).not.toHaveAttribute('data-android-configurator');
     expect(screen.getByRole('banner')).not.toHaveAttribute('data-android-sofa');
     expect(observe).not.toHaveBeenCalled();
     expect(document.documentElement.style.getPropertyValue('--android-sofa-topbar-bottom')).toBe('');
     expect(document.documentElement.style.getPropertyValue('--android-sofa-chrome-height')).toBe('');
   });
 
-  it('tracks the Android sofa header bottom and releases it when leaving the page', () => {
+  it.each([
+    ['sofa', { sofaConfigurator: true }, true],
+    ['mattress/bedframe', { productConfigurator: true }, false],
+  ] as const)('tracks the Android %s header and releases measurements when leaving the page', (_name, props, isSofa) => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 14) Chrome/130.0.0.0');
     let bottom = 112;
     let height = 112;
@@ -96,11 +101,23 @@ describe('Android sofa layout scope', () => {
       disconnect = disconnect;
     });
 
-    const { unmount } = render(<MemoryRouter><Topbar sofaConfigurator /></MemoryRouter>);
+    const addProduct = vi.fn();
+    const { unmount } = render(
+      <MemoryRouter>
+        <Topbar {...props} rightSlot={<button onClick={addProduct}>Add configured product</button>} />
+      </MemoryRouter>,
+    );
     const header = screen.getByRole('banner');
     const headerBottom = () => document.documentElement.style.getPropertyValue('--android-sofa-topbar-bottom');
     const chromeHeight = () => document.documentElement.style.getPropertyValue('--android-sofa-chrome-height');
-    expect(header).toHaveAttribute('data-android-sofa');
+    expect(header).toHaveAttribute('data-android-configurator');
+    if (isSofa) expect(header).toHaveAttribute('data-android-sofa');
+    else expect(header).not.toHaveAttribute('data-android-sofa');
+    // Both product actions and account controls survive the shared header layout.
+    fireEvent.click(within(header).getByRole('button', { name: 'Add configured product' }));
+    expect(addProduct).toHaveBeenCalledOnce();
+    expect(within(header).getByLabelText('Switch user')).toBeInTheDocument();
+    expect(within(header).getByLabelText('Change PIN')).toBeInTheDocument();
     expect(observe).toHaveBeenCalledWith(header);
     expect(headerBottom()).toBe('112px');
     expect(chromeHeight()).toBe('112px');

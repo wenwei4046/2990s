@@ -88,12 +88,13 @@
 
 /* This is the same price/action content, portalled into the Android toolbar. */
 .priceBar.toolbarPriceBar {
-  width: 100%;
+  width: auto;
   padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
-  gap: 6px 12px;
+  gap: 8px 16px;
+  justify-content: flex-end;
 }
 .toolbarPriceBar > div:first-child {
   flex: 0 0 auto;
@@ -104,16 +105,14 @@
   align-items: baseline;
   align-content: center;
   gap: 2px 6px;
-  padding: 6px 10px;
-  background: var(--c-cream);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  padding: 4px 16px;
+  border-left: 1px solid var(--line);
 }
-.toolbarPriceBar > div:first-child > span:first-child { font-size: 10px; letter-spacing: .12em; }
-.toolbarPriceBar .footerPrice { margin-left: 0; }
+.toolbarPriceBar > div:first-child > span:first-child { font-size: 11px; letter-spacing: .08em; }
+.toolbarPriceBar .footerPrice { margin-left: 0; font-family: var(--font-title); font-weight: var(--w-bold); font-stretch: normal; letter-spacing: normal; line-height: 1.35; font-variant-numeric: tabular-nums; }
 .toolbarPriceBar .footerPrice > span:last-child { font-size: var(--fs-24); }
 .toolbarPriceBar .footerPrice > span:first-child { font-size: var(--fs-12); }
-.toolbarPriceBar .priceActions { gap: 8px; }
+.toolbarPriceBar .priceActions { gap: 8px; margin-left: 0; }
 .toolbarPriceBar .priceActions > button {
   min-height: 44px;
   padding: 8px 12px;
