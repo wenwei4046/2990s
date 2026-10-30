@@ -251,6 +251,32 @@ describe('isolated mobile POS simulation', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('splits My orders by showroom or roadshow event, cards and board by the same pick', async () => {
+    await send('/mfg-sales-orders', 'POST', { ...validOrder(), venue: 'Demo Mall Atrium' });
+    await send('/mfg-sales-orders', 'POST', { ...validOrder(), venue: 'Demo Mall Atrium' });
+    const all = await (await send('/pos/sales-stats')).json();
+    expect(all.showroomCount).toBe(3);
+    expect(all.places).toEqual([
+      { kind: 'venue', venue: 'Demo Showroom', count: 1 },
+      expect.objectContaining({ kind: 'event', projectId: 9001, venue: 'Demo Mall Atrium', organizer: 'Demo Home Fair', count: 2 }),
+    ]);
+
+    const atEvent = await (await send('/pos/sales-stats?project=9001')).json();
+    expect(atEvent).toMatchObject({ showroomCount: 2, personalCount: 2, showroomTotal: 5980 });
+    // The list is the whole period's, so picking one place does not empty it.
+    expect(atEvent.places).toHaveLength(2);
+    const board = (await (await send('/mfg-sales-orders/mine?project=9001')).json()).salesOrders;
+    expect(board.map((o: { venue: string }) => o.venue)).toEqual(['Demo Mall Atrium', 'Demo Mall Atrium']);
+
+    const showroom = await (await send('/pos/sales-stats?venue=demo%20showroom')).json();
+    expect(showroom.showroomCount).toBe(1);
+    // Every order is in exactly one place, so the places add up to the whole.
+    expect(atEvent.showroomTotal + showroom.showroomTotal).toBe(all.showroomTotal);
+    expect((await (await send('/mfg-sales-orders/mine?venue=Demo%20Showroom')).json()).salesOrders).toHaveLength(1);
+    // A search stays a lookup across every place.
+    expect((await (await send('/mfg-sales-orders/mine?q=demo&venue=Demo%20Showroom')).json()).salesOrders).toHaveLength(3);
+  });
+
   it('keeps a SKU off the shelf out of the catalogue until Show in POS puts it on, as Houzs does', async () => {
     const codes = async () => ((await (await send('/pos-pools/mfg-catalog')).json()).products as Array<{ code: string }>).map((p) => p.code);
     expect(await codes()).not.toContain('DEMO-TB');

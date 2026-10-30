@@ -168,6 +168,17 @@ When porting this to React + Vite + RR7:
 
 ## Approved deviations from prototype
 
+### My orders · showroom or roadshow event · 30 October 2026
+
+Owner requested a way to separate My orders by showroom or roadshow event,
+because every place's sales were pooled into one figure. A place picker sits in
+the toolbar beside the salesperson picker, for all staff (it only narrows what
+they already see): All showrooms & roadshows, then Showrooms, Roadshow events
+("VENUE — ORGANIZER · 3 – 12 Oct") and No venue recorded when there is one. Both
+KPI cards and the board follow the pick, and the card headings name it. Picking
+an event moves the period to that event's own days. Search still looks across
+all dates and places. The picker stays hidden when the API does not list places.
+
 ### Sofa accessories in Combo Price and Quick Pick · 30 October 2026
 
 Loo requested that sofa accessories placed on a custom sofa be saved with Add to

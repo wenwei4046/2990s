@@ -113,6 +113,13 @@ const dropdowns: Record<string, string[]> = { customer_type: ['NEW', 'EXISTING']
 export const dropdownOptions = Object.fromEntries(Object.entries(dropdowns).map(([category, values]) => [category, values.map((value, sortOrder) => ({ id: `demo-${category}-${sortOrder}`, category, value, label: value === 'Online' ? 'Bank transfer' : value, active: true, sortOrder }))]));
 export const venues = [
   { id: 'demo-venue', name: 'Demo Showroom', address: '1 Demo Lane, 47300 Petaling Jaya, Selangor', city: 'Petaling Jaya', state: 'Selangor', active: true, created_at: timestamp },
+  { id: 'demo-venue-atrium', name: 'Demo Mall Atrium', address: 'Ground floor atrium, 47500 Subang Jaya, Selangor', city: 'Subang Jaya', state: 'Selangor', active: true, created_at: timestamp },
+];
+/* A fictional roadshow, running around the day the simulation loads. An order
+   sold at its venue is linked to it, as Houzs's fair link does on create. */
+const myDay = (offsetDays: number) => new Date(Date.now() + 8 * 3_600_000 + offsetDays * 86_400_000).toISOString().slice(0, 10);
+export const demoEvents = [
+  { projectId: 9001, venue: 'Demo Mall Atrium', organizer: 'Demo Home Fair', solo: false, brand: '2990', startDate: myDay(-2), endDate: myDay(7) },
 ];
 export const localities = [{ state: 'Selangor', city: 'Petaling Jaya', postcode: '47300' }, { state: 'Selangor', city: 'Shah Alam', postcode: '40000' }, { state: 'Kuala Lumpur', city: 'Kuala Lumpur', postcode: '50000' }, { state: 'Johor', city: 'Johor Bahru', postcode: '80000' }, { state: 'Pulau Pinang', city: 'George Town', postcode: '10000' }];
 export const demoCustomer = { debtorName: 'Demo Customer', phone: '+60120000000', email: 'demo@example.test', customerType: 'NEW', address1: '1 Demo Lane', address2: '', city: 'Petaling Jaya', postcode: '47300', customerState: 'Selangor', buildingType: 'Landed', emergencyContactName: 'Demo Contact', emergencyContactPhone: '+60120000001', emergencyContactRelationship: 'Spouse', customerId: 'demo-customer', race: 'Chinese', birthday: '1990-01-01', gender: 'Male', lastDocNo: 'DEMO-SO-0000', lastOrderAt: timestamp };

@@ -1,8 +1,9 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
 import { comboChargedPrices, maintActiveValues, type MfgSeatHeightPrice, type DefaultFreeGift, type FreeItemEligibility, type FreeItemCampaign, type RuleTarget } from '@2990s/shared';
 import { authedFetch, authedFetchRaw, API_URL, IS_HOUZS, HOUZS_COMPANY_ID, houzsApiRoot, posApiBase } from './apiClient';
 import { useMaintenanceConfig, type MaintenanceResolved } from './products/mfg-products-queries';
+import { placeParams, type SalesPlaceEntry } from './sales-place';
 import {
   DEFAULT_ARM_WIDTH_CM,
   guessAccessoryRole,
@@ -2198,24 +2199,33 @@ export interface SalesStatsRow {
   personalProducts: number;
   personalService:  number;
   personalKpi:      number;
+  /** The showrooms and roadshow events the period's orders were sold at — the
+   *  My-orders picker (lib/sales-place.ts). Absent on an API without the pick. */
+  places?: SalesPlaceEntry[];
 }
 
 /* `window` = the My-orders toolbar period (MY-local YYYY-MM-DD, `to` inclusive).
    Omitted / empty → the server defaults to the current calendar month. The two
-   bounds are part of the query key so each selected period caches separately. */
+   bounds are part of the query key so each selected period caches separately.
+   `place` = the picked showroom or roadshow event (a lib/sales-place value).
+   The previous answer stays while the next loads, so the picker keeps its list;
+   the cards show their spinner over it (`isPlaceholderData`). */
 export const useSalesStats = (
   window?: { from: string | null; to: string | null },
   salesperson?: string | null,
+  place?: string | null,
 ) =>
   useQuery({
-    queryKey: ['pos', 'sales-stats', window?.from ?? null, window?.to ?? null, salesperson ?? null],
+    queryKey: ['pos', 'sales-stats', window?.from ?? null, window?.to ?? null, salesperson ?? null, place ?? null],
     staleTime: 60_000,
+    placeholderData: keepPreviousData,
     queryFn: async (): Promise<SalesStatsRow> => {
       const params = new URLSearchParams();
       if (window?.from) params.set('from', window.from);
       if (window?.to)   params.set('to', window.to);
       // Owner-tier only: scope the Personal card to a chosen salesperson.
       if (salesperson && salesperson !== 'all') params.set('salesperson', salesperson);
+      for (const [key, value] of Object.entries(placeParams(place ?? null))) params.set(key, value);
       const qs = params.toString();
       // /pos/sales-stats lives at /api/pos (NOT under /api/scm), so route it via
       // posApiBase() — same as verify-pin/set-pin. Without the override authedFetch

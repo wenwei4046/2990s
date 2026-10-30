@@ -433,6 +433,10 @@
   cursor: pointer;
   max-width: 180px;
 }
+/* Showroom / roadshow event pick — an event reads "VENUE — ORGANIZER · 3 – 12 Oct",
+   so it gets more room than a salesperson's name. */
+.placePicker { min-width: 0; }
+.placeSelect { max-width: 280px; }
 
 .periodCtl {
   display: flex;
@@ -543,7 +547,9 @@
 }
 
 @media (max-width: 720px) {
-  .toolbar { flex-direction: column; align-items: stretch; }
+  /* nowrap: a wrapping column sizes itself to its widest item, so one long
+     roadshow name in the place picker pushed every row past the screen. */
+  .toolbar { flex-direction: column; align-items: stretch; flex-wrap: nowrap; }
   .searchBox { max-width: none; }
   .periodCtl { justify-content: space-between; }
 }
