@@ -214,6 +214,19 @@ Apple, phone, and non-sofa layouts retain their existing rules. The local
 simulation can explicitly select the Android layout for review; this does not
 emulate Android itself or establish the physical tablet's browser scaling.
 
+Owner follow-up after physical tablet photos: mattress and bedframe names still
+overlap the checkout steps, and sofa chrome needs clearer spacing and typography.
+At Android tablet widths (768–1366 CSS px), all three configurators now use a
+navigation/account row followed by a separate product/price/action row. The logo
+has 16px top padding plus the device safe area and a 44px aligned navigation row.
+Product names wrap in their own flexible column; redundant product-name eyebrows
+on mattress/bedframe become category labels. Prices use the existing system title
+font, tabular numbers and consistent label spacing. Customize includes its product
+name, with price/actions grouped on the right. Measured header height continues
+to fit the sofa room and position notices on all three product pages. Apple and
+phone presentation remain unchanged. This supersedes the sofa-only header scope
+and the compact bordered landscape price summary in the preceding entry.
+
 ### SKU Master model filter names · 30 October 2026
 
 Owner requested the POS SKU Master model filter rail to follow the Model name.

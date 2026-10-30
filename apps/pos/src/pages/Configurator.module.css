@@ -6,10 +6,8 @@
   width: 100%;
 }
 
-.customToolbar { flex: 1 1 420px; min-width: 0; max-width: 100%; }
-@media (min-width: 1280px) {
-  .customToolbar { border-inline-start: 1px solid var(--line); padding-inline-start: 12px; }
-}
+.customToolbarGroup { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; width: 100%; min-width: 0; }
+.customToolbar { flex: 0 1 auto; margin-left: auto; min-width: 0; max-width: 100%; }
 .customShell[data-fit-sofa] {
   height: calc(100dvh - var(--android-sofa-chrome-height, 68px));
   min-height: 0;
@@ -641,20 +639,23 @@
   }
 }
 
-/* Android-only sofa density: the device's 1280px viewport is just beyond
-   the original tablet breakpoint. Apple keeps the original rules above. */
+/* The second Android selling row has its own name, price and action columns.
+   Text grows vertically instead of painting over navigation or neighbouring
+   columns. Apple retains the existing single-row presentation above. */
 @media (min-width: 768px) and (max-width: 1366px) {
-  :global([data-android-sofa]) .topbarActions { gap: 6px; flex: 1 1 auto; }
-  :global([data-android-sofa]) .topbarChip { flex: 1 1 200px; max-width: 240px; }
-  :global([data-android-sofa]) .topbarChipEyebrow { letter-spacing: 0.12em; }
-  :global([data-android-sofa]) .topbarChipSub { overflow: hidden; text-overflow: ellipsis; }
-  :global([data-android-sofa]) .topbarTotal { padding: 2px var(--space-2); flex-shrink: 0; }
-  :global([data-android-sofa]) .topbarBtnGhost,
-  :global([data-android-sofa]) .topbarBtnPrimary { padding: 6px 12px; font-size: var(--fs-12); flex-shrink: 0; }
-  :global([data-android-sofa]) ~ .notice { top: calc(var(--android-sofa-topbar-bottom, 76px) + 8px); }
-}
-@media (min-width: 768px) and (max-width: 1100px) {
-  :global([data-android-sofa]) .topbarActions { flex-basis: 480px; }
+  :global([data-android-configurator]) .topbarActions { gap: 12px; flex: 1 1 100%; flex-wrap: wrap; }
+  :global([data-android-configurator]) .topbarChip { flex: 1 1 200px; max-width: none; text-align: left; gap: 3px; line-height: 1.4; }
+  :global([data-android-configurator]) .topbarChipEyebrow { font-size: 11px; letter-spacing: .08em; }
+  :global([data-android-configurator]) .topbarChipName { font-size: var(--fs-14); line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
+  :global([data-android-configurator]) .topbarChipSub { overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-12); letter-spacing: 0; }
+  :global([data-android-configurator]) .topbarTotal { display: grid; grid-template-columns: auto auto; align-items: baseline; padding: 4px 16px; flex-shrink: 0; line-height: 1.35; gap: 2px 6px; }
+  :global([data-android-configurator]) .topbarTotalLbl { font-size: 11px; letter-spacing: .08em; }
+  :global([data-android-configurator]) .topbarTotalAmt { font-size: var(--fs-24); font-variant-numeric: tabular-nums; }
+  :global([data-android-configurator]) .topbarTotalAmt sup { font-size: var(--fs-12); vertical-align: baseline; margin-right: 4px; }
+  :global([data-android-configurator]) .topbarTotalNote { grid-column: 1 / -1; text-align: right; font-size: 10px; }
+  :global([data-android-configurator]) .topbarBtnGhost,
+  :global([data-android-configurator]) .topbarBtnPrimary { min-height: 44px; padding: 8px 16px; border-radius: var(--radius-sm); font-size: var(--fs-13); flex-shrink: 0; }
+  :global([data-android-configurator]) ~ .notice { top: calc(var(--android-sofa-topbar-bottom, 76px) + 8px); }
 }
 
 /* ─── Pillow rows (PILLOWS + ADD-ON sections) ─────────────────────── */

@@ -21,6 +21,8 @@ const STEPS: { id: StepId; label: string }[] = [
 ];
 
 interface TopbarProps {
+  /** Product details/actions get their own row on Android tablets. */
+  productConfigurator?: boolean;
   /** Android sofa controls need their own density rules; keep Apple unchanged. */
   sofaConfigurator?: boolean;
   mobileActionsInPage?: boolean;
@@ -49,7 +51,7 @@ interface TopbarProps {
   backLabel?: string;
 }
 
-export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileActionsInPage, mobileCenterInPage, mobileMenuSlot, centerBelowOnMobile, sofaConfigurator }: TopbarProps) {
+export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileActionsInPage, mobileCenterInPage, mobileMenuSlot, centerBelowOnMobile, sofaConfigurator, productConfigurator }: TopbarProps) {
   const { user, signOut } = useAuth();
   const { data: staff } = useStaff();
   const canChangePin = useCanChangePin();
@@ -65,14 +67,15 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
   const name = staff?.name ?? user?.email?.split('@')[0] ?? 'Staff';
   const role = isMarketing ? 'marketing' : staff?.role ?? 'Staff';
   const avatarColor = staff?.color ?? '#A6471E';
-  const androidSofa = sofaConfigurator && usesAndroidSofaLayout(navigator.userAgent, IS_SIMULATION, window.location.search, navigator.maxTouchPoints);
+  const androidProduct = (sofaConfigurator || productConfigurator) && usesAndroidSofaLayout(navigator.userAgent, IS_SIMULATION, window.location.search, navigator.maxTouchPoints);
+  const androidSofa = sofaConfigurator && androidProduct;
   const headerRef = useRef<HTMLElement>(null);
 
   // Android actions may occupy another row. Keep fixed configurator notices
   // below the actual sticky header, including the local simulation banner.
   useEffect(() => {
     const header = headerRef.current;
-    if (!androidSofa || !header) return;
+    if (!androidProduct || !header) return;
     const root = document.documentElement;
     const banner = header.previousElementSibling?.classList.contains(styles.simulationBanner!) ? header.previousElementSibling : null;
     const measure = () => {
@@ -91,12 +94,12 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
       root.style.removeProperty('--android-sofa-topbar-bottom');
       root.style.removeProperty('--android-sofa-chrome-height');
     };
-  }, [androidSofa]);
+  }, [androidProduct]);
 
   return (
     <>
     {IS_SIMULATION && <div className={styles.simulationBanner}>Local simulation · No live orders or payments</div>}
-    <header ref={headerRef} data-android-sofa={androidSofa ? '' : undefined} className={`${styles.topbar} ${centerBelowOnMobile ? styles.centerBelowOnMobile : ''}`}>
+    <header ref={headerRef} data-android-configurator={androidProduct ? '' : undefined} data-android-sofa={androidSofa ? '' : undefined} className={`${styles.topbar} ${centerBelowOnMobile ? styles.centerBelowOnMobile : ''}`}>
       <div className={styles.left}>
         {backTo && (
           <Link to={backTo} className={styles.iconBtn} aria-label={backLabel ?? 'Back'}>
@@ -123,6 +126,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
       </div>
 
       <div className={`${styles.right} ${mobileActionsInPage ? styles.mobileHidden : ''}`}>
+        <div className={styles.actionSlot}>
         {rightSlot ?? (
           <>
             <Link to="/quotes" className={styles.pill} aria-label="Saved quotes">
@@ -149,6 +153,8 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
             )}
           </>
         )}
+        </div>
+        <div className={styles.accountActions}>
         {user && (
           <span className={styles.staffChip}>
             <span className={styles.avatar} style={{ background: avatarColor }}>
@@ -179,6 +185,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
         >
           <LogOut size={18} strokeWidth={1.75} />
         </button>
+        </div>
       </div>
       <div className={styles.mobileNav}>
         <Link to="/cart" className={styles.mobileCart} aria-label={`Cart, ${count} items`}>

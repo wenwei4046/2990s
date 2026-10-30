@@ -265,6 +265,8 @@ export const Configurator = () => {
   const { productId } = useParams<{ productId: string }>();
   const navigate = useNavigate();
   const isPhone = useMediaQuery('(max-width: 767px)');
+  const isTablet = useMediaQuery('(min-width: 768px) and (max-width: 1366px)');
+  const androidProductLayout = isTablet && usesAndroidSofaLayout(navigator.userAgent, IS_SIMULATION, window.location.search, navigator.maxTouchPoints);
   const isTabletLandscape = useMediaQuery('(min-width: 768px) and (max-width: 1366px) and (orientation: landscape)');
   const androidSofaLandscape = isTabletLandscape && usesAndroidSofaLayout(navigator.userAgent, IS_SIMULATION, window.location.search, navigator.maxTouchPoints);
   const [customToolbarTarget, setCustomToolbarTarget] = useState<HTMLDivElement | null>(null);
@@ -2178,9 +2180,9 @@ export const Configurator = () => {
     <span className={styles.topbarActions}>
       <span className={styles.topbarChip}>
         <span className={styles.topbarChipEyebrow}>
-          {(p.name ?? '').toUpperCase()} · {(p.category_id ?? '').toUpperCase()}
+          {androidProductLayout ? (p.category_id ?? '').toUpperCase() : `${(p.name ?? '').toUpperCase()} · ${(p.category_id ?? '').toUpperCase()}`}
         </span>
-        <span className={styles.topbarChipName}>
+        <span className={styles.topbarChipName} title={p.name}>
           {p.name}
           {pickedSize ? ` · ${pickedSize.label}` : ''}
         </span>
@@ -2226,9 +2228,9 @@ export const Configurator = () => {
     <span className={styles.topbarActions}>
       <span className={styles.topbarChip}>
         <span className={styles.topbarChipEyebrow}>
-          {(p.name ?? '').toUpperCase()} · {(p.category_id ?? '').toUpperCase()}
+          {androidProductLayout ? (p.category_id ?? '').toUpperCase() : `${(p.name ?? '').toUpperCase()} · ${(p.category_id ?? '').toUpperCase()}`}
         </span>
-        <span className={styles.topbarChipName}>
+        <span className={styles.topbarChipName} title={p.name}>
           {p.name}
           {pickedSize ? ` · ${pickedSize.label}` : ''}
           {isDivan ? ' · Divan' : ''}
@@ -2276,7 +2278,7 @@ export const Configurator = () => {
           keeps its desktop width there and the layout name shows in full. */}
       <span className={`${styles.topbarChip} ${styles.topbarChipWide}`}>
         <span className={styles.topbarChipEyebrow}>
-          {(p.name ?? '').toUpperCase()} · {(p.category_id ?? '').toUpperCase()}
+          {androidProductLayout && !pickedQP && !pickedSofaRow ? 'SOFA' : `${(p.name ?? '').toUpperCase()} · ${(p.category_id ?? '').toUpperCase()}`}
         </span>
         <span className={styles.topbarChipName}>
           {pickedQP
@@ -2437,10 +2439,17 @@ export const Configurator = () => {
     <>
     <Topbar
       step={isSofa ? undefined : 'cart'}
+      productConfigurator={isSofa || isSize || isBedframe}
       sofaConfigurator={isSofa}
       centerSlot={sofaCenterSlot}
       rightSlot={isSofa && mode === 'custom' && androidSofaLandscape
-        ? <div ref={setCustomToolbarTarget} className={styles.customToolbar} data-sofa-toolbar="" />
+        ? <div className={styles.customToolbarGroup}>
+            <span className={styles.topbarChip}>
+              <span className={styles.topbarChipEyebrow}>Custom sofa</span>
+              <span className={styles.topbarChipName} title={p.name}>{p.name}</span>
+            </span>
+            <div ref={setCustomToolbarTarget} className={styles.customToolbar} data-sofa-toolbar="" />
+          </div>
         : sofaTopbarSlot ?? sizeTopbarSlot ?? bedframeTopbarSlot}
       mobileActionsInPage
       mobileCenterInPage
