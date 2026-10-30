@@ -52,6 +52,12 @@ import {
 } from '../components/handover/AddonsPaymentStep';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocalities, useSalesStats } from '../lib/queries';
+import {
+  placeOptionGroups,
+  placeParams,
+  type SalesPlaceEntry,
+  type SalesPlacePick,
+} from '../lib/sales-place';
 import { hiddenOrderCount } from '../lib/order-board-counts';
 import {
   usePaymentMethodLabels,
@@ -213,15 +219,15 @@ const monthName = (year: number, month0: number): string =>
     timeZone: 'UTC',
   }).format(new Date(Date.UTC(year, month0, 1)));
 
-const useMyOrders = (period: Period, search: string, salesperson: string | null) =>
+const useMyOrders = (period: Period, search: string, salesperson: string | null, place: string | null) =>
   useQuery({
-    // Search ignores the period (global lookup); otherwise key by the period so
-    // each month / range caches on its own. salesperson scopes the whole board
-    // (owner-tier only; ignored server-side for everyone else).
+    // Search ignores the period and the place (global lookup); otherwise key by
+    // both so each month / range / place caches on its own. salesperson scopes
+    // the whole board (owner-tier only; ignored server-side for everyone else).
     queryKey: [
       'my-orders',
       salesperson ?? 'self',
-      search.trim() ? `q:${search.trim()}` : `p:${periodKey(period)}`,
+      search.trim() ? `q:${search.trim()}` : `p:${periodKey(period)}|${place ?? ''}`,
     ],
     // Reads the salesperson's own Backend Sales Orders via the API (the board
     // is unified onto mfg_sales_orders; the legacy retail `orders` table is no
@@ -236,6 +242,8 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
         const { from, to } = periodToWindow(period);
         if (from) params.set('from', from);
         if (to) params.set('to', to);
+        // The cards' pick, by the same rule (lib/sales-place.ts).
+        for (const [key, value] of Object.entries(placeParams(place))) params.set(key, value);
       }
       if (salesperson) params.set('salesperson', salesperson);
       const qs = params.toString();
@@ -757,6 +765,45 @@ const OrderSearch = ({ query, setQuery }: { query: string; setQuery: (query: str
   </div>
 );
 
+/* Showroom or roadshow event (owner 2026-10-30) — see lib/sales-place.ts. Not
+   gated on canSeeAll: it only narrows what the caller already sees. */
+const PlacePicker = ({
+  places,
+  place,
+  setPlace,
+}: {
+  places: readonly SalesPlaceEntry[];
+  place: SalesPlacePick | null;
+  setPlace: (p: SalesPlacePick | null) => void;
+}) => {
+  const groups = placeOptionGroups(places, place);
+  const all = [...groups.showrooms, ...groups.events, ...groups.other];
+  return (
+    <label className={`${styles.spPicker} ${styles.placePicker}`}>
+      <MapPin size={16} strokeWidth={1.75} aria-hidden="true" />
+      <select
+        className={`${styles.spSelect} ${styles.placeSelect}`}
+        value={place?.value ?? ''}
+        onChange={(e) => setPlace(all.find((o) => o.value === e.target.value) ?? null)}
+        aria-label="Filter by showroom or roadshow event"
+      >
+        <option value="">All showrooms &amp; roadshows</option>
+        {groups.showrooms.length > 0 && (
+          <optgroup label="Showrooms">
+            {groups.showrooms.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </optgroup>
+        )}
+        {groups.events.length > 0 && (
+          <optgroup label="Roadshow events">
+            {groups.events.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </optgroup>
+        )}
+        {groups.other.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </label>
+  );
+};
+
 const OrderToolbar = ({
   search,
   period,
@@ -765,6 +812,9 @@ const OrderToolbar = ({
   salesStaff,
   salesperson,
   setSalesperson,
+  places,
+  place,
+  setPlace,
 }: {
   search?: ReactNode;
   period: Period;
@@ -773,6 +823,10 @@ const OrderToolbar = ({
   salesStaff: { id: string; name: string }[];
   salesperson: string;
   setSalesperson: (s: string) => void;
+  /** Undefined on an API without the pick — the picker then stays hidden. */
+  places: readonly SalesPlaceEntry[] | undefined;
+  place: SalesPlacePick | null;
+  setPlace: (p: SalesPlacePick | null) => void;
 }) => {
   // Live MY month — can't browse into the future, so clamp the stepper here.
   const nowMy = new Date(Date.now() + 8 * 60 * 60 * 1000);
@@ -819,6 +873,7 @@ const OrderToolbar = ({
           </select>
         </label>
       )}
+      {places && <PlacePicker places={places} place={place} setPlace={setPlace} />}
 
       <div className={styles.periodCtl}>
         <div className={styles.modeToggle} role="tablist" aria-label="Period mode">
@@ -923,8 +978,24 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
   const effectiveSalesperson = canSeeAll ? salesperson : null;
   const salesStaff = useSalesStaff(canSeeAll);
 
-  const orders = useMyOrders(period, debouncedQuery, effectiveSalesperson);
-  const stats = useSalesStats(periodToWindow(period), effectiveSalesperson);
+  // Showroom or roadshow event — narrows the cards and the board alike.
+  const [place, setPlace] = useState<SalesPlacePick | null>(null);
+  const pickPlace = useCallback((next: SalesPlacePick | null) => {
+    setPlace(next);
+    // An event is shown whole — its own days, not the part inside one month.
+    if (next?.range) setPeriod({ mode: 'range', from: next.range.from, to: next.range.to });
+  }, []);
+
+  const orders = useMyOrders(period, debouncedQuery, effectiveSalesperson, place?.value ?? null);
+  const stats = useSalesStats(periodToWindow(period), effectiveSalesperson, place?.value ?? null);
+  /* The cards' own answer — not the previous one, kept while it loads so the
+     place picker keeps its list. */
+  const statsNow = stats.isPlaceholderData ? undefined : stats.data;
+  /* An API without the pick ignores it: drop the pick rather than label every
+     place's figures with one place's name. */
+  useEffect(() => {
+    if (place && statsNow && !Array.isArray(statsNow.places)) setPlace(null);
+  }, [place, statsNow]);
   useMyOrdersRealtime();
   const list = orders.data ?? [];
   const [active, setActive] = useState<MyOrderRow | null>(null);
@@ -944,22 +1015,22 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
     salesperson !== 'all'
       ? salesStaff.data?.find((s) => s.id === salesperson)?.name
       : undefined;
-  const personalName = selectedStaffName ?? stats.data?.staffName ?? viewerName;
+  const personalName = selectedStaffName ?? statsNow?.staffName ?? viewerName;
   const periodLabel =
     period.mode === 'month'
       ? monthName(period.year, period.month0)
-      : stats.data?.monthLabel ?? 'the selected dates';
+      : statsNow?.monthLabel ?? 'the selected dates';
 
   /* Count reconciliation (2026-08-11) — see lib/order-board-counts.ts for why
      the KPI cards and this board can disagree, and why the check is one-way. */
   const hiddenCount = hiddenOrderCount({
     canSeeAll,
     salesperson,
-    showroomCount: stats.data?.showroomCount,
-    personalCount: stats.data?.personalCount,
+    showroomCount: statsNow?.showroomCount,
+    personalCount: statsNow?.personalCount,
     shown: list.length,
     searching,
-    loading: orders.isLoading || stats.isLoading,
+    loading: orders.isLoading || stats.isLoading || stats.isPlaceholderData,
   });
 
   // Keep the active drawer order in sync with refetches.
@@ -1014,7 +1085,7 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
         </div>
       </header>
 
-      <SalesKpis stats={stats} personalName={personalName} />
+      <SalesKpis stats={stats} personalName={personalName} placeLabel={place?.title ?? null} />
 
       <OrderToolbar
         search={isPhone ? undefined : <OrderSearch query={query} setQuery={setQuery} />}
@@ -1024,6 +1095,9 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
         salesStaff={salesStaff.data ?? []}
         salesperson={salesperson}
         setSalesperson={setSalesperson}
+        places={stats.data?.places}
+        place={place}
+        setPlace={pickPlace}
       />
 
       {isPhone && (
@@ -1065,7 +1139,7 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
 
       {searching && (
         <p className={styles.searchHint}>
-          Showing search results across all dates.
+          Showing search results across all dates{place ? ', showrooms and roadshows' : ''}.
         </p>
       )}
 
@@ -1101,7 +1175,8 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
             <>
               <p>
                 No orders in {periodLabel}
-                {selectedStaffName ? ` for ${selectedStaffName}` : ''}.
+                {selectedStaffName ? ` for ${selectedStaffName}` : ''}
+                {place ? ` at ${place.title}` : ''}.
               </p>
               {selectedStaffName && (
                 <p className={styles.searchHint}>
@@ -1183,42 +1258,51 @@ const SalesKpis = ({
   /** Whose figures the Personal card holds — the filtered salesperson when one
    *  is picked, otherwise the viewer. Not always the logged-in user. */
   personalName,
+  /** The picked showroom or roadshow event both cards are narrowed to. */
+  placeLabel,
 }: {
   stats: ReturnType<typeof useSalesStats>;
   personalName: string;
+  placeLabel: string | null;
 }) => {
-  const monthLabel = stats.data?.monthLabel ?? '';
-  const loading = stats.isLoading && !stats.data;
+  /* The previous answer stays in `stats.data` while the next loads (it keeps the
+     place picker's list); its figures belong to the previous pick, so the cards
+     spin over it instead of showing them under the new one. */
+  const data = stats.isPlaceholderData ? undefined : stats.data;
+  const loading = !data && !stats.error;
+  const monthLabel = data?.monthLabel ?? '';
+  const scopeLabel = stats.data?.showroomScope === 'company' ? 'Company' : 'Showroom';
+  const at = placeLabel ? `${placeLabel} · ` : '';
   const mobileRows = [
     {
       id: 'personal',
       label: 'Personal',
       note: personalName,
       Icon: ShieldCheck,
-      total: stats.data?.personalTotal ?? 0,
-      count: stats.data?.personalCount ?? 0,
-      products: stats.data?.personalProducts ?? 0,
-      service: stats.data?.personalService ?? 0,
-      kpi: stats.data?.personalKpi ?? 0,
+      total: data?.personalTotal ?? 0,
+      count: data?.personalCount ?? 0,
+      products: data?.personalProducts ?? 0,
+      service: data?.personalService ?? 0,
+      kpi: data?.personalKpi ?? 0,
     },
     {
       id: 'showroom',
-      label: stats.data?.showroomScope === 'company' ? 'Company' : 'Showroom',
+      label: scopeLabel,
       note: 'All salespeople',
       Icon: Store,
-      total: stats.data?.showroomTotal ?? 0,
-      count: stats.data?.showroomCount ?? 0,
-      products: stats.data?.showroomProducts ?? 0,
-      service: stats.data?.showroomService ?? 0,
-      kpi: stats.data?.showroomKpi ?? 0,
+      total: data?.showroomTotal ?? 0,
+      count: data?.showroomCount ?? 0,
+      products: data?.showroomProducts ?? 0,
+      service: data?.showroomService ?? 0,
+      kpi: data?.showroomKpi ?? 0,
     },
   ];
   return (
-    <section className={styles.kpis} aria-label={`Sales · ${monthLabel}`}>
+    <section className={styles.kpis} aria-label={`Sales · ${at}${monthLabel}`}>
       <div className={styles.kpiMobile}>
         <div className={styles.kpiMobilePeriod}>
           <strong>{monthLabel || '—'}</strong>
-          <span>Sales summary</span>
+          <span>{placeLabel ? `Sales at ${placeLabel}` : 'Sales summary'}</span>
         </div>
         <div className={styles.kpiMobileCard}>
           {mobileRows.map(({ id, label, note, Icon, total, count, products, service, kpi }) => (
@@ -1247,9 +1331,9 @@ const SalesKpis = ({
       <div className={styles.kpiCard}>
         <div className={styles.kpiHead}>
           <Store size={13} strokeWidth={1.75} />
-          {stats.data?.showroomScope === 'company' ? 'Company' : 'Showroom'} · {monthLabel || '—'}
+          {scopeLabel} · {at}{monthLabel || '—'}
         </div>
-        {stats.isLoading && !stats.data ? (
+        {loading ? (
           <KpiPlaceholder />
         ) : stats.error ? (
           <div className={styles.kpiError}>Couldn’t load</div>
@@ -1257,17 +1341,17 @@ const SalesKpis = ({
           <>
             <div className={styles.kpiNum}>
               <span className={styles.kpiUnit}>RM</span>
-              {fmtMoney(stats.data?.showroomTotal ?? 0)}
+              {fmtMoney(data?.showroomTotal ?? 0)}
             </div>
             <div className={styles.kpiDelta}>
               <Receipt size={12} strokeWidth={1.75} />
-              {stats.data?.showroomCount ?? 0}{' '}
-              {(stats.data?.showroomCount ?? 0) === 1 ? 'order' : 'orders'}
+              {data?.showroomCount ?? 0}{' '}
+              {(data?.showroomCount ?? 0) === 1 ? 'order' : 'orders'}
             </div>
             <KpiBreakdown
-              products={stats.data?.showroomProducts ?? 0}
-              service={stats.data?.showroomService ?? 0}
-              kpi={stats.data?.showroomKpi ?? 0}
+              products={data?.showroomProducts ?? 0}
+              service={data?.showroomService ?? 0}
+              kpi={data?.showroomKpi ?? 0}
             />
           </>
         )}
@@ -1276,9 +1360,9 @@ const SalesKpis = ({
       <div className={styles.kpiCard}>
         <div className={styles.kpiHead}>
           <ShieldCheck size={13} strokeWidth={1.75} />
-          {personalName} · {monthLabel || '—'}
+          {personalName} · {at}{monthLabel || '—'}
         </div>
-        {stats.isLoading && !stats.data ? (
+        {loading ? (
           <KpiPlaceholder />
         ) : stats.error ? (
           <div className={styles.kpiError}>Couldn’t load</div>
@@ -1286,17 +1370,17 @@ const SalesKpis = ({
           <>
             <div className={styles.kpiNum}>
               <span className={styles.kpiUnit}>RM</span>
-              {fmtMoney(stats.data?.personalTotal ?? 0)}
+              {fmtMoney(data?.personalTotal ?? 0)}
             </div>
             <div className={styles.kpiDelta}>
               <Receipt size={12} strokeWidth={1.75} />
-              {stats.data?.personalCount ?? 0}{' '}
-              {(stats.data?.personalCount ?? 0) === 1 ? 'order' : 'orders'}
+              {data?.personalCount ?? 0}{' '}
+              {(data?.personalCount ?? 0) === 1 ? 'order' : 'orders'}
             </div>
             <KpiBreakdown
-              products={stats.data?.personalProducts ?? 0}
-              service={stats.data?.personalService ?? 0}
-              kpi={stats.data?.personalKpi ?? 0}
+              products={data?.personalProducts ?? 0}
+              service={data?.personalService ?? 0}
+              kpi={data?.personalKpi ?? 0}
             />
           </>
         )}

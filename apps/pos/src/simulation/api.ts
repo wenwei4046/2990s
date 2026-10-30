@@ -5,6 +5,7 @@ import { buildVariantSummary, matchComboSubset, campaignsCoveringLine, buildFree
 import { meetsProceedGate, meetsProcessingDatePaymentGate } from '@2990s/shared/order-rules';
 import { splitSofaBuildIntoModuleLines } from '@2990s/shared/so-sofa-split';
 import { planVoucher } from '../lib/voucher-apply';
+import { NO_VENUE, type SalesPlaceEntry } from '../lib/sales-place';
 // Pure calendar helper used by the actual API's board and sales summary. It
 // performs no I/O and keeps inclusive MY-local date ranges consistent.
 import { monthBoundsMy, rangeBoundsMy } from '../../../api/src/lib/my-time';
@@ -46,6 +47,37 @@ const uid = (kind: string) => {
   return `demo-${kind}-${random}`;
 };
 const money = (r: Row, field: string) => Number(r[`${field}Sen`] ?? r[`${field}Centi`] ?? 0);
+/* My orders' showroom / roadshow pick, by Houzs's rule (its scm/lib/pos-sales-place.ts):
+   an order linked to an event counts under it, every other order under its venue. */
+const demoEventAt = (venue: unknown) => fixtures.demoEvents.find((e) => e.venue.toLowerCase() === String(venue ?? '').trim().toLowerCase());
+const placeKeyOf = (o: Row): string => o.project_id != null ? `event:${o.project_id}` : `venue:${String(o.venue ?? '').trim().toLowerCase() || NO_VENUE}`;
+const pickedPlace = (params: URLSearchParams): string | null => {
+  const project = (params.get('project') ?? '').trim();
+  if (/^[1-9]\d{0,9}$/.test(project)) return `event:${Number(project)}`;
+  const venue = (params.get('venue') ?? '').trim();
+  return venue ? `venue:${venue === NO_VENUE ? NO_VENUE : venue.toLowerCase()}` : null;
+};
+function placesOf(orders: StoredOrder[]): SalesPlaceEntry[] {
+  const groups = new Map<string, { order: Row; count: number }>();
+  for (const { salesOrder } of orders) {
+    const key = placeKeyOf(salesOrder);
+    const g = groups.get(key);
+    if (g) g.count += 1; else groups.set(key, { order: salesOrder, count: 1 });
+  }
+  const venues: SalesPlaceEntry[] = [];
+  const events: SalesPlaceEntry[] = [];
+  for (const { order, count } of groups.values()) {
+    if (order.project_id == null) {
+      venues.push({ kind: 'venue', venue: String(order.venue ?? '').trim() || null, count });
+      continue;
+    }
+    const e = fixtures.demoEvents.find((x) => x.projectId === order.project_id);
+    events.push({ kind: 'event', projectId: order.project_id, venue: e?.venue ?? null, organizer: e?.organizer ?? null, solo: e?.solo ?? false, brand: e?.brand ?? null, startDate: e?.startDate ?? null, endDate: e?.endDate ?? null, count });
+  }
+  const name = (p: SalesPlaceEntry) => (p.kind === 'venue' ? p.venue : null);
+  venues.sort((a, b) => (name(a) === null ? 1 : name(b) === null ? -1 : name(a)!.localeCompare(name(b)!)));
+  return [...venues, ...events];
+}
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-pos-simulation': 'local-only' } });
 const failure = (error: string, reason: string, status = 400) => json({ error, reason, simulation: true }, status);
 
@@ -90,7 +122,7 @@ function createStoredOrder(body: Row, docNo: string): StoredOrder {
   }
   const paymentBodies = body.payments?.length ? body.payments : money(body, 'deposit') > 0 ? [{ ...body, method: body.paymentMethod, amountSen: money(body, 'deposit') }] : [];
   const order: StoredOrder = {
-    salesOrder: { doc_no: docNo, debtor_name: body.debtorName, phone: body.phone ?? null, email: body.email ?? null, customer_id: body.customerId ?? 'demo-customer', customer_type: body.customerType ?? 'NEW', address1: body.address1 ?? null, address2: body.address2 ?? null, city: body.city ?? null, postcode: body.postcode ?? null, customer_state: body.customerState ?? null, building_type: body.buildingType ?? null, bill_to_address: body.billToAddress ?? null, emergency_contact_name: body.emergencyContactName ?? null, emergency_contact_phone: body.emergencyContactPhone ?? null, emergency_contact_relationship: body.emergencyContactRelationship ?? null, customer_race: body.customerRace ?? null, customer_birthday: body.customerBirthday ?? null, customer_gender: body.customerGender ?? null, customer_delivery_date: body.customerDeliveryDate ?? body.targetDate ?? null, target_date: body.targetDate ?? null, processing_date: body.processingDate ?? body.internalExpectedDd ?? null, internal_expected_dd: body.processingDate ?? body.internalExpectedDd ?? null, payment_method: body.paymentMethod ?? 'cash', approval_code: body.approvalCode ?? null, signature_b64: body.signatureB64 ?? null, note: body.note ?? null, so_date: today(), created_at: now(), status: 'CONFIRMED', proceeded_at: null, salesperson_id: 'demo-sales', salesperson_name: 'Demo Sales', staff_name: 'Demo Sales', venue_id: body.venueId ?? 'demo-venue', venue: body.venue ?? 'Demo Showroom', has_children: false },
+    salesOrder: { doc_no: docNo, debtor_name: body.debtorName, phone: body.phone ?? null, email: body.email ?? null, customer_id: body.customerId ?? 'demo-customer', customer_type: body.customerType ?? 'NEW', address1: body.address1 ?? null, address2: body.address2 ?? null, city: body.city ?? null, postcode: body.postcode ?? null, customer_state: body.customerState ?? null, building_type: body.buildingType ?? null, bill_to_address: body.billToAddress ?? null, emergency_contact_name: body.emergencyContactName ?? null, emergency_contact_phone: body.emergencyContactPhone ?? null, emergency_contact_relationship: body.emergencyContactRelationship ?? null, customer_race: body.customerRace ?? null, customer_birthday: body.customerBirthday ?? null, customer_gender: body.customerGender ?? null, customer_delivery_date: body.customerDeliveryDate ?? body.targetDate ?? null, target_date: body.targetDate ?? null, processing_date: body.processingDate ?? body.internalExpectedDd ?? null, internal_expected_dd: body.processingDate ?? body.internalExpectedDd ?? null, payment_method: body.paymentMethod ?? 'cash', approval_code: body.approvalCode ?? null, signature_b64: body.signatureB64 ?? null, note: body.note ?? null, so_date: today(), created_at: now(), status: 'CONFIRMED', proceeded_at: null, salesperson_id: 'demo-sales', salesperson_name: 'Demo Sales', staff_name: 'Demo Sales', venue_id: body.venueId ?? 'demo-venue', venue: body.venue ?? 'Demo Showroom', project_id: demoEventAt(body.venue)?.projectId ?? null, has_children: false },
     items,
     payments: paymentBodies.map((p: Row) => paymentFromPayload(p, true)),
   };
@@ -342,7 +374,8 @@ async function dispatch(path: string, params: URLSearchParams, method: string, b
   if (path === '/mfg-sales-orders/customer-search') return json({ customers: fixtures.demoCustomer.debtorName.toLowerCase().includes((params.get('name') ?? '').toLowerCase()) ? [fixtures.demoCustomer] : [] });
   if (path === '/mfg-sales-orders/mine') {
     const search = (params.get('q') ?? '').toLowerCase();
-    const orders = store.orders.filter(({ salesOrder: o }) => search ? `${o.doc_no} ${o.debtor_name} ${o.phone}`.toLowerCase().includes(search) : (!params.get('from') || o.so_date >= params.get('from')!) && (!params.get('to') || o.so_date <= params.get('to')!));
+    const place = pickedPlace(params);
+    const orders = store.orders.filter(({ salesOrder: o }) => search ? `${o.doc_no} ${o.debtor_name} ${o.phone}`.toLowerCase().includes(search) : (!params.get('from') || o.so_date >= params.get('from')!) && (!params.get('to') || o.so_date <= params.get('to')!) && (!place || placeKeyOf(o) === place));
     return json({ salesOrders: orders.slice().reverse().map((o) => ({ ...o.salesOrder, items: o.items })) });
   }
   if (path === '/pos/sales-stats') {
@@ -350,15 +383,18 @@ async function dispatch(path: string, params: URLSearchParams, method: string, b
     const to = params.get('to');
     const myNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
     const bounds = from || to ? rangeBoundsMy(from, to) : monthBoundsMy(myNow.getUTCFullYear(), myNow.getUTCMonth());
-    const orders = store.orders.filter(({ salesOrder: order }) =>
+    const inPeriod = store.orders.filter(({ salesOrder: order }) =>
       !['CANCELLED', 'ON_HOLD', 'DRAFT'].includes(order.status)
       && (!bounds.startUtc || order.created_at >= bounds.startUtc)
       && (!bounds.endUtc || order.created_at < bounds.endUtc),
     );
+    // The list is read before the pick narrows the cards, as on Houzs.
+    const place = pickedPlace(params);
+    const orders = place ? inPeriod.filter(({ salesOrder }) => placeKeyOf(salesOrder) === place) : inPeriod;
     const total = orders.reduce((sum, order) => sum + order.salesOrder.total_revenue_sen / 100, 0);
     const service = orders.reduce((sum, order) => sum + order.items.reduce((lineSum, item) => lineSum + (!item.cancelled && item.item_group === 'service' ? item.total_sen / 100 : 0), 0), 0);
     const products = Math.max(0, total - service);
-    return json({ monthLabel: bounds.label, monthStart: bounds.startUtc, monthEnd: bounds.endUtc, staffName: 'Demo Sales', showroomScope: 'showroom', showroomTotal: total, showroomCount: orders.length, personalTotal: total, personalCount: orders.length, showroomProducts: products, showroomService: service, showroomKpi: 0, personalProducts: products, personalService: service, personalKpi: 0 });
+    return json({ monthLabel: bounds.label, monthStart: bounds.startUtc, monthEnd: bounds.endUtc, staffName: 'Demo Sales', showroomScope: 'showroom', showroomTotal: total, showroomCount: orders.length, personalTotal: total, personalCount: orders.length, showroomProducts: products, showroomService: service, showroomKpi: 0, personalProducts: products, personalService: service, personalKpi: 0, places: placesOf(inPeriod) });
   }
   if (path === '/mfg-sales-orders/cross-category-eligibility') {
     const match = store.orders.find((o) => o.salesOrder.doc_no === params.get('docNo') && o.salesOrder.phone === params.get('phone'));

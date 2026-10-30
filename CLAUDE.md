@@ -553,6 +553,31 @@ modules the way the repo's bundle detection does (whole-piece 1S/2S/3S, 1B/2B as
 
 ---
 
+## My orders › showroom or roadshow event (2026-10-30)
+
+Owner 2026-10-30: the My-orders cards and board pooled every showroom and every
+roadshow, "difficult to manage" — pick a showroom, or a roadshow and which event.
+
+- 🔑 **The rule lives in Houzs**, `backend/src/scm/lib/pos-sales-place.ts`: an
+  order linked to a PMS event (`project_id`, set by Houzs's fair link on create and
+  its nightly reconcile) counts under that event; every other order under its
+  `venue`. Each order is in exactly one entry. `GET /api/pos/sales-stats` answers
+  `places` (read BEFORE the pick narrows) and narrows both cards by `?project=` /
+  `?venue=` (`__none__` = no venue); `GET /mfg-sales-orders/mine` narrows the board
+  by the same rule. A search ignores the pick, like the period.
+- The POS (`lib/sales-place.ts`, `PlacePicker` in `OrderStatus.tsx`) shows the
+  picker only when the stats answer `places`: an API without the pick ignores it,
+  and the cards would show every place under one place's name.
+- Picking an event moves the period to the event's own days (Range). Event dates
+  are written day first on the POS ("3 – 12 Oct"): Houzs's house shape is MM/DD.
+- ⚠️ **Only as right as the order's venue.** The handover's Venue fills itself from
+  Houzs: the PMS event the salesperson is PIC / Sales Attending on, else their
+  showroom. Someone at a roadshow who is not on its Sales Attending, and does not
+  change the venue, books the order under the showroom — and Houzs cannot link it
+  to the event either.
+
+---
+
 ## Modular › "Show in POS" — the SKUs' shelf flag, not the Model (2026-10-24)
 
 Owner 2026-10-24: a new SKU must not reach the tablet until someone switches it on in
