@@ -1,0 +1,84 @@
+/* Modular › a category's ⋯ and its menu — Marketing's ⋯ (marketing.module.css). */
+.moreWrap {
+  margin-left: auto;
+  position: relative;
+}
+
+.moreBtn {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1.5px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.moreBtn:hover,
+.moreBtnOpen {
+  border-color: var(--line);
+  background: #fff;
+  color: var(--c-ink);
+}
+
+.moreScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.morePop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 41;
+  width: 300px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(34, 31, 32, 0.14);
+}
+
+.moreItem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  color: var(--c-ink);
+}
+
+.moreItem:hover {
+  background: var(--c-cream);
+}
+
+.moreItemIcon {
+  flex-shrink: 0;
+  color: var(--c-burnt);
+}
+
+.moreItemText {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.moreItemTitle {
+  font-size: var(--fs-14);
+  font-weight: 600;
+}
+
+.moreItemSub {
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+}

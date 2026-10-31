@@ -705,3 +705,12 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* Modular › a category's section header, with ⋯ › Edit several models at its
+   end (2026-11-01; components/products/ModularBulkDrawer). */
+.sectionHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}

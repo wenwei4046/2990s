@@ -102,16 +102,15 @@ export function useProductModels(opts?: {
   });
 }
 
+/** One Model with every SKU it has (any status, one-shot included). */
+export const fetchProductModel = (id: string) =>
+  authedFetch<{ model: ProductModelRow; skus: ModelSkuRow[] }>(`/product-models/${id}`);
+
 export function useProductModel(id: string | undefined) {
   return useQuery({
     queryKey: ['product-models', id],
     enabled: !!id,
-    queryFn: async () => {
-      const res = await authedFetch<{ model: ProductModelRow; skus: ModelSkuRow[] }>(
-        `/product-models/${id}`,
-      );
-      return res;
-    },
+    queryFn: () => fetchProductModel(id!),
     staleTime: 30_000,
   });
 }
@@ -139,46 +138,64 @@ export function useCreateProductModel() {
   });
 }
 
+export type ProductModelPatch = {
+  branding?: string | null;
+  modelCode?: string;
+  name?: string;
+  description?: string | null;
+  photoUrl?: string | null;
+  allowedOptions?: AllowedOptions;
+  active?: boolean;
+};
+
+/** PATCH /product-models/:id. Houzs answers the SKUs it created for newly
+ *  ticked sofa compartments (Chairman 2026-06-02) — 2990's own API does not. */
+export const patchProductModel = (id: string, body: ProductModelPatch) =>
+  authedFetch<{ model: ProductModelRow; autoCreatedSkus?: string[]; autoCreateFailed?: string[] }>(
+    `/product-models/${id}`,
+    { method: 'PATCH', body: JSON.stringify(body) },
+  );
+
+/** Everything a Model's save can change on screen — its card, the catalogue,
+ *  SKU Master and the configurator's option pools. */
+export const invalidateAfterModelSave = (qc: QueryClient, id?: string) => Promise.all([
+  qc.invalidateQueries({ queryKey: ['product-models'] }),
+  ...(id ? [qc.invalidateQueries({ queryKey: ['product-models', id] })] : []),
+  invalidateCatalog(qc),
+  // Activating a sofa compartment may auto-create its SKU server-side
+  // (Chairman 2026-06-02) — refresh SKU Master so the new SKU shows up.
+  qc.invalidateQueries({ queryKey: ['mfg-products'] }),
+  // allowed_options drives the POS configurator's per-SKU option pools
+  // (legs / sizes / compartments / fabrics / specials). Those queries are
+  // keyed by SKU id, NOT model id, so the model invalidations above don't
+  // touch them — without this, deactivating e.g. a leg height in the
+  // Allowed Options drawer never reaches the configurator until the 30s
+  // staleTime lapses or the app reloads ("save did nothing", 2026-06-16).
+  // Invalidate by key PREFIX so every affected SKU of this Model refetches.
+  qc.invalidateQueries({ queryKey: ['sofa-leg-heights'] }),
+  qc.invalidateQueries({ queryKey: ['bedframe-customizer-data'] }),
+  qc.invalidateQueries({ queryKey: ['sofa-customizer-data'] }),
+  qc.invalidateQueries({ queryKey: ['model-allowed-fabrics'] }),
+  qc.invalidateQueries({ queryKey: ['model-allowed-specials'] }),
+  qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === 'product' && q.queryKey[2] === 'sizes' }),
+]);
+
+/** Drop the cached copy of each Model (GET /product-models/:id), so the next
+ *  card to open them reads them afresh. For writes made with no card open:
+ *  invalidating would leave the old copy to be shown first, and a card's
+ *  draft starts from the first data it sees. */
+export const forgetProductModels = (qc: QueryClient, ids: readonly string[]) => {
+  for (const id of ids) qc.removeQueries({ queryKey: ['product-models', id], exact: true });
+};
+
 export function useUpdateProductModel() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (args: {
-      id: string;
-      branding?: string | null;
-      modelCode?: string;
-      name?: string;
-      description?: string | null;
-      photoUrl?: string | null;
-      allowedOptions?: AllowedOptions;
-      active?: boolean;
-    }) => {
+    mutationFn: async (args: { id: string } & ProductModelPatch) => {
       const { id, ...body } = args;
-      return authedFetch<{ model: ProductModelRow }>(`/product-models/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(body),
-      });
+      return patchProductModel(id, body);
     },
-    onSuccess: (_, vars) => Promise.all([
-      qc.invalidateQueries({ queryKey: ['product-models'] }),
-      qc.invalidateQueries({ queryKey: ['product-models', vars.id] }),
-      invalidateCatalog(qc),
-      // Activating a sofa compartment may auto-create its SKU server-side
-      // (Chairman 2026-06-02) — refresh SKU Master so the new SKU shows up.
-      qc.invalidateQueries({ queryKey: ['mfg-products'] }),
-      // allowed_options drives the POS configurator's per-SKU option pools
-      // (legs / sizes / compartments / fabrics / specials). Those queries are
-      // keyed by SKU id, NOT model id, so the model invalidations above don't
-      // touch them — without this, deactivating e.g. a leg height in the
-      // Allowed Options drawer never reaches the configurator until the 30s
-      // staleTime lapses or the app reloads ("save did nothing", 2026-06-16).
-      // Invalidate by key PREFIX so every affected SKU of this Model refetches.
-      qc.invalidateQueries({ queryKey: ['sofa-leg-heights'] }),
-      qc.invalidateQueries({ queryKey: ['bedframe-customizer-data'] }),
-      qc.invalidateQueries({ queryKey: ['sofa-customizer-data'] }),
-      qc.invalidateQueries({ queryKey: ['model-allowed-fabrics'] }),
-      qc.invalidateQueries({ queryKey: ['model-allowed-specials'] }),
-      qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === 'product' && q.queryKey[2] === 'sizes' }),
-    ]),
+    onSuccess: (_, vars) => invalidateAfterModelSave(qc, vars.id),
   });
 }
 
