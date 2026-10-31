@@ -308,17 +308,19 @@ export function useUpdateMfgProductPrices() {
 /** Modular › "Show in POS" on a single-SKU Model: puts its SKUs on or off the
  *  POS shelf (pos_active — lib/products/show-in-pos.ts). One PATCH per SKU that
  *  changes; Houzs reads posActive for exactly this (its mfg-products PATCH). */
+export async function setSkusOnPos(skuIds: readonly string[], on: boolean): Promise<void> {
+  for (const id of skuIds) {
+    await authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ posActive: on }),
+    });
+  }
+}
+
 export function useSetSkusOnPos() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (args: { skuIds: readonly string[]; on: boolean }) => {
-      for (const id of args.skuIds) {
-        await authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ posActive: args.on }),
-        });
-      }
-    },
+    mutationFn: (args: { skuIds: readonly string[]; on: boolean }) => setSkusOnPos(args.skuIds, args.on),
     // Settled, not success: a second SKU failing still leaves the first changed.
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['product-models'] });

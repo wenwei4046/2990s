@@ -598,6 +598,33 @@ Generate SKUs — and the catalogue spine lists only `pos_active` SKUs.
   book a SKU that is off the tablet. The catalogue, the My Orders product swap and Houzs's
   HR KPI item list honour it.
 
+## Modular › ⋯ › Edit several models (2026-11-01)
+
+Owner 2026-11-01: every category section in Modular has ⋯ › **Edit several models** — a
+Model card's Allowed Options drawer over several Models of that category at once
+(`components/products/ModularBulkDrawer.tsx`; rules in `lib/products/modular-bulk.ts`). Pick
+the Models (all, to start), tap an option on / off, Save: it reaches every picked Model, and
+whatever was not touched stays as each Model has it. Sofa / bedframe / mattress get their
+option chips, fabrics, sofa accessories and Needed to order; single-SKU categories get
+**Show in POS** (the SKUs' shelf flag, as on the card); a Sofa Accessory also On the sofa and
+its own colours. Its placement (Where it goes, arm width) stays on each card.
+
+- 🔑 Held as EDITS, never as a copy of any Model's options. Save re-reads each Model it
+  will write (`GET /product-models/:id`) and applies the edits to that, and writes only the
+  Models they change.
+- 🔑 **A compartment is turned on only where the Model already has its SKU** (`MODEL-comp`,
+  case-insensitive, as Houzs looks). Houzs's PATCH creates an UNPRICED SKU for a newly
+  ticked compartment without one — the RM 0 module of "Unpriced sofa modules" — and the
+  owner wants this to change Modular only, not Houzs ERP. Skipped Models are named in the
+  drawer; ticking it on a Model's own card still creates the SKU.
+- 🔑 Both drawers seed a Model with `seedModularOptions` and draw chips from
+  `modularChipPools` (`lib/products/modular-options.ts`). Change a rule there, not in one
+  drawer, or the same chip starts meaning two things.
+- ⚠️ A Model card's draft starts from the FIRST data it sees, cached or not. A write made
+  with no card open must drop that Model's cached copy (`forgetProductModels`), or the card
+  reopens on the old options and its Save puts them back. Invalidating is not enough: no
+  observer, no refetch.
+
 ## Sofa Accessories — pieces on the Custom build (2026-10-16)
 
 **2026-10-30 — inclusive POS combos and saved Quick Picks.** A Combo may now

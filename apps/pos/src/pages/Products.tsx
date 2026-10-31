@@ -74,7 +74,6 @@ import {
   maintEntryValue,
   maintEntryActive,
   maintEntryWithValue,
-  fillEmptyAllowedOptions,
   type MaintPoolEntry,
   SOFA_MODULES,
   resolveSofaQuickPresets,
@@ -122,6 +121,9 @@ import {
   type AllowedOptions,
   type ProductModelRow,
 } from '../lib/products/product-models-queries';
+import { modularChipPools, seedModularOptions } from '../lib/products/modular-options';
+import { DrawerShell } from '../components/products/DrawerShell';
+import { ModularBulkDrawer, ModularCategoryMenu } from '../components/products/ModularBulkDrawer';
 import { FabricsTable } from '../components/products/FabricsTable';
 import { groupFabricSeries } from '../lib/fabric-series-groups';
 import { useFabricSeriesNames } from '../lib/fabric-series-queries';
@@ -835,6 +837,8 @@ const numberInputCell = (label: string, value: number | '', setValue: (v: number
 const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
   const canEditAllowed = mode === 'add-only' || mode === 'full';
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
+  // ⋯ › Edit several models: the category whose drawer is open.
+  const [bulkCategory, setBulkCategory] = useState<string | null>(null);
   const [filter, setFilter] = useState<MfgCategory | 'all'>('all');
   const [search, setSearch] = useState('');
   const { data: models, isLoading } = useProductModels({
@@ -949,21 +953,28 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
             key={cat}
             style={{ background: 'var(--c-paper)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)' }}
           >
-            <h3
-              style={{
-                margin: 0,
-                marginBottom: 'var(--space-3)',
-                fontFamily: 'var(--font-sans)',
-                fontSize: 'var(--fs-15)',
-                fontWeight: 600,
-                color: 'var(--c-ink)',
-              }}
-            >
-              <span className={styles.catPill} style={{ marginRight: 8 }}>{productCategoryLabel(cat)}</span>
-              <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>
-                {list.length} {list.length === 1 ? 'model' : 'models'}
-              </span>
-            </h3>
+            <div className={styles.sectionHead}>
+              <h3
+                style={{
+                  margin: 0,
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 'var(--fs-15)',
+                  fontWeight: 600,
+                  color: 'var(--c-ink)',
+                }}
+              >
+                <span className={styles.catPill} style={{ marginRight: 8 }}>{productCategoryLabel(cat)}</span>
+                <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>
+                  {list.length} {list.length === 1 ? 'model' : 'models'}
+                </span>
+              </h3>
+              {canEditAllowed && (
+                <ModularCategoryMenu
+                  label={productCategoryLabel(cat)}
+                  onEditSeveral={() => setBulkCategory(cat)}
+                />
+              )}
+            </div>
             <div
               style={{
                 display: 'grid',
@@ -1120,6 +1131,15 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
           onClose={() => setEditingModelId(null)}
         />
       )}
+      {bulkCategory && (
+        <ModularBulkDrawer
+          key={bulkCategory}
+          category={bulkCategory}
+          models={grouped.find(([c]) => c === bulkCategory)?.[1] ?? []}
+          skusByModelId={skusByModelId}
+          onClose={() => setBulkCategory(null)}
+        />
+      )}
     </>
   );
 };
@@ -1184,37 +1204,10 @@ const ModelAllowedOptionsDrawer = ({
     const mdl = model.data?.model;
     const mcfg = masterCfg.data?.data;
     if (!mdl || !mcfg || draft != null) return;
-    const saved = JSON.parse(JSON.stringify(mdl.allowed_options ?? {})) as AllowedOptions;
-    // Seed the leg chips all-on ONLY for an UNCONFIGURED Model (leg_heights key
-    // absent) — a sensible "offer every leg" default so staff untick-to-exclude.
-    // If the key is PRESENT (even []), the Model was explicitly configured, so we
-    // render its saved set as-is: a saved [] means "offer no legs" and must show
-    // every chip OFF (owner 2026-06-16 — staff want to be able to turn all legs
-    // off). Mirrors useSofaLegHeights' absent=all / present=exact semantics.
-    const legPool =
-      mdl.category === 'SOFA' ? mcfg.sofaLegHeights
-      : mdl.category === 'BEDFRAME' ? mcfg.legHeights
-      : undefined;
-    let seeded = (legPool && !('leg_heights' in saved))
-      ? fillEmptyAllowedOptions(saved, { leg_heights: legPool.map((o) => o.value) })
-      : saved;
-    // Bedframe gaps + divan heights (Loo 2026-08-28). Same ON/OFF ticks as leg
-    // heights, so an option ADDED to Maintenance later can be switched on per
-    // Model instead of staying invisible in the POS configurator forever.
-    //
-    // Seeded on absent OR empty — deliberately laxer than the leg_heights guard
-    // above. leg_heights distinguishes the two (useSofaLegHeights: absent = all,
-    // present-empty = none); these two pools do NOT. useBedframeCustomizerData's
-    // gate() and the server's hasRestriction() both read a present-but-EMPTY list
-    // as "no restriction = offer everything", so rendering that state as
-    // all-chips-OFF would lie about what the configurator actually does.
-    if (mdl.category === 'BEDFRAME') {
-      seeded = fillEmptyAllowedOptions(seeded, {
-        gaps: maintActiveValues(mcfg.gaps),
-        divan_heights: (mcfg.divanHeights ?? []).map((o) => o.value),
-      });
-    }
-    setDraft(seeded);
+    // Legs offered "all" until the Model saves its own list, a bedframe's gaps
+    // and divan heights likewise — lib/products/modular-options.ts, shared with
+    // ⋯ › Edit several models so a chip means the same in both.
+    setDraft(seedModularOptions(mdl, mcfg));
     setShowDraft(modelShownInPos(mdl.active, model.data?.skus ?? []));
   }, [model.data, masterCfg.data, draft]);
 
@@ -1241,46 +1234,25 @@ const ModelAllowedOptionsDrawer = ({
      stay absent from the patched allowed_options on save. */
   const isSofa     = m.category === 'SOFA';
   const isBedframe = m.category === 'BEDFRAME';
-  const isMattress = m.category === 'MATTRESS';
   // Flat categories have no variants — they're sold straight at the SKU Master
   // price, so the option pickers (sizes/compartments/etc.) don't apply. Every
   // category but sofa / bedframe / mattress, as in Houzs — a Sofa Accessory
   // model used to fall through to the bedframe size pool here.
   const isFlatCategory = isSingleSkuCategory(m.category);
 
-  /* Master pool sources (drawn from MaintenanceConfig). For lists keyed as
-     PricedOption[], we project just the .value field for the chip text. */
-  const pricedValues = (arr: PricedOption[] | undefined): string[] =>
-    (arr ?? []).map((p) => p.value);
-
-  // ACTIVE toggles (owner spec 2026-06-12) — Modular chips offer ACTIVE
-  // values only; already-ticked inactive values still render via the
-  // allowed_options union downstream.
-  const sizePool: string[] = isSofa
-    ? (cfg.sofaSizes ? maintActiveValues(cfg.sofaSizes) : ['24', '26', '28', '30', '32', '35'])
-    : isMattress
-      ? maintActiveValues(cfg.mattressSizes)
-      : maintActiveValues(cfg.bedframeSizes);
-  const compartmentPool: string[] = isSofa ? maintActiveValues(cfg.sofaCompartments) : [];
-  // Gaps + divan heights are BEDFRAME-only: the POS configurator renders them
-  // from useBedframeCustomizerData, which is the master Maintenance pool ∩ these
-  // ticks. Divan heights are a PRICED pool (surcharge); gaps a plain string pool.
-  const gapPool: string[]         = isBedframe ? maintActiveValues(cfg.gaps) : [];
-  const divanHeightPool: string[] = isBedframe ? pricedValues(cfg.divanHeights) : [];
-  const legHeightPool: string[]   = isSofa
-    ? pricedValues(cfg.sofaLegHeights)
-    : isBedframe
-      ? pricedValues(cfg.legHeights)
-      : [];
-  // Special Add-ons (migration 0134) — per-Model on/off sources from the
-  // special_addons table filtered by this Model's category, replacing the old
-  // flat cfg.specials / cfg.sofaSpecials pools. Ticks still write
-  // allowed_options.specials by CODE (special_addons.code == the old value), so
-  // every Model's existing on/off is preserved and the server gate is unchanged.
-  // Now also works for MATTRESS Models (the old pools were bedframe/sofa only).
-  const specialAddonPool: string[] = (specialAddons.data ?? [])
-    .filter((a) => a.active && a.categories.includes(m.category))
-    .map((a) => a.code);
+  /* Master pool sources (drawn from MaintenanceConfig), ACTIVE values only
+     (owner spec 2026-06-12) — lib/products/modular-options.ts, shared with
+     ⋯ › Edit several models. Special Add-ons (migration 0134) come off the
+     special_addons rows for this Model's category, ticked by CODE
+     (special_addons.code == the old value), so every Model's existing on/off
+     is preserved and the server gate is unchanged. */
+  const pools = modularChipPools(m.category, cfg, specialAddons.data ?? []);
+  const sizePool = pools.sizes;
+  const compartmentPool = pools.compartments;
+  const gapPool = pools.gaps;
+  const divanHeightPool = pools.divan_heights;
+  const legHeightPool = pools.leg_heights;
+  const specialAddonPool = pools.specials;
   // Sofa Accessories (owner 2026-10-16): ticked ones show in this Model's
   // Custom build palette. Stored by accessory MODEL id — a code rename in Houzs
   // re-points item codes, never ids. One switched off "On the sofa" (owner
@@ -1572,65 +1544,6 @@ const ModelAllowedOptionsDrawer = ({
     </DrawerShell>
   );
 };
-
-/** Minimal drawer-shell wrapper. Right-slide panel with backdrop. */
-const DrawerShell = ({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-}) => (
-  <div
-    role="dialog"
-    aria-label={title}
-    style={{
-      position: 'fixed',
-      inset: 0,
-      background: 'rgba(0, 0, 0, 0.32)',
-      zIndex: 80,
-      display: 'flex',
-      justifyContent: 'flex-end',
-    }}
-    onClick={onClose}
-  >
-    <div
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        width: 'min(520px, 100vw)',
-        height: '100%',
-        background: 'var(--c-paper)',
-        boxShadow: '-12px 0 32px rgba(0, 0, 0, 0.18)',
-        padding: 'var(--space-5)',
-        overflowY: 'auto',
-        display: 'flex',
-        flexDirection: 'column',
-      }}
-    >
-      <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-4)' }}>
-        <h2 style={{
-          margin: 0,
-          fontFamily: 'var(--font-title)',
-          fontSize: 'var(--fs-20)',
-          fontWeight: 700,
-          color: 'var(--c-ink)',
-        }}>{title}</h2>
-        <button
-          type="button"
-          aria-label="Close"
-          onClick={onClose}
-          className={styles.maintRowIcon}
-          style={{ color: 'var(--fg-muted)' }}
-        >
-          <X {...ICON_PROPS} />
-        </button>
-      </header>
-      <div style={{ flex: 1, minHeight: 0 }}>{children}</div>
-    </div>
-  </div>
-);
 
 /** Chip-picker row used by ModelAllowedOptionsDrawer. */
 const AllowedOptionsSection = ({
